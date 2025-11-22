@@ -1496,7 +1496,8 @@ class HTMLReportCreator(ReportCreator):
 		for i in range(0, 24):
 			if i in hour_of_day:
 				r = 127 + int((float(hour_of_day[i]) / data.activity_by_hour_of_day_busiest) * 128)
-				f.write('<td style="background-color: rgb(%d, 0, 0)">%.2f</td>' % (r, (100.0 * hour_of_day[i]) / totalcommits))
+				pct = (100.0 * hour_of_day[i]) / totalcommits if totalcommits > 0 else 0
+				f.write('<td style="background-color: rgb(%d, 0, 0)">%.2f</td>' % (r, pct))
 			else:
 				f.write('<td>0.00</td>')
 		f.write('</tr></table>')
@@ -1535,7 +1536,8 @@ class HTMLReportCreator(ReportCreator):
 			f.write('<tr>')
 			f.write('<th>%d</th>' % (d + 1))
 			if d in day_of_week:
-				f.write('<td>%d (%.2f%%)</td>' % (day_of_week[d], (100.0 * day_of_week[d]) / totalcommits))
+				pct = (100.0 * day_of_week[d]) / totalcommits if totalcommits > 0 else 0
+				f.write('<td>%d (%.2f%%)</td>' % (day_of_week[d], pct))
 			else:
 				f.write('<td>0</td>')
 			f.write('</tr>')
@@ -1847,7 +1849,8 @@ class HTMLReportCreator(ReportCreator):
 			info = data.getDomainInfo(domain)
 			domain_labels.append(domain)
 			domain_commits.append(info['commits'])
-			f.write('<tr><th>%s</th><td>%d (%.2f%%)</td></tr>' % (domain, info['commits'], (100.0 * info['commits'] / totalcommits)))
+			pct = (100.0 * info['commits']) / totalcommits if totalcommits > 0 else 0
+			f.write('<tr><th>%s</th><td>%d (%.2f%%)</td></tr>' % (domain, info['commits'], pct))
 		f.write('</table></div>')
 
 		# Interactive Chart.js version (horizontal bar chart)
