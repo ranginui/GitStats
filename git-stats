@@ -527,7 +527,7 @@ class GitDataCollector(DataCollector):
 			(hash, tag) = line.split(' ')
 
 			tag = tag.replace('refs/tags/', '')
-			output = getpipeoutput(['git log "%s" --pretty=format:"%%at %%an" -n 1' % hash], quiet=True)
+			output = getpipeoutput(['git log "%s" --pretty=format:"%%at %%aN" -n 1' % hash], quiet=True)
 			if len(output) > 0:
 				parts = output.split(' ')
 				stamp = 0
@@ -566,7 +566,8 @@ class GitDataCollector(DataCollector):
 
 		# Collect revision statistics
 		# Outputs "<stamp> <date> <time> <timezone> <author> '<' <mail> '>'"
-		cmd = 'git rev-list --pretty=format:"%%at %%ai %%an <%%aE>" %s %s' % (git_filter, git_branch)
+		# Note: Using %aN and %aE (capital letters) to respect .mailmap
+		cmd = 'git log --pretty=format:"%%at %%ai %%aN <%%aE>" %s %s' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd, 'grep -v ^commit']).split('\n')
 		commit_lines = [l for l in lines if l]
 		logger.info('Processing %d commits...' % len(commit_lines))
@@ -763,7 +764,7 @@ class GitDataCollector(DataCollector):
 		#  N files changed, N insertions (+), N deletions(-)
 		# <stamp> <author>
 		self.changes_by_date = {} # stamp -> { files, ins, del }
-		cmd = 'git log %s %s --shortstat --pretty=format:"%%at %%an"' % (git_filter, git_branch)
+		cmd = 'git log %s %s --shortstat --pretty=format:"%%at %%aN"' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd]).split('\n')
 		lines.reverse()
 		logger.info('Calculating line statistics (%d entries)...' % len(lines))
@@ -859,7 +860,7 @@ class GitDataCollector(DataCollector):
 		# Collect file volatility metrics
 		# Use git log --numstat to get per-file changes
 		logger.info('Analyzing file volatility...')
-		cmd = 'git log %s %s --numstat --pretty=format:"%%at %%an"' % (git_filter, git_branch)
+		cmd = 'git log %s %s --numstat --pretty=format:"%%at %%aN"' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd]).split('\n')
 
 		current_stamp = None

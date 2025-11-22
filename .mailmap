@@ -1,0 +1,14 @@
+# Example .mailmap file for GitStats
+# Maps different author identities to canonical names
+#
+# Format examples:
+#   Proper Name <proper@email.com> Commit Name <commit@email.com>
+#   Proper Name <proper@email.com> <commit@email.com>
+#
+# Note: When same email but different name, include both name and email on right side
+
+# Map all Claude commits to one identity
+Claude <claude@anthropic.com> Claude <noreply@anthropic.com>
+
+# Consolidate Dmitry/Dmitriy Novotochinov (typo in first name, same email)
+Dmitry Novotochinov <trybeee@gmail.com> Dmitriy Novotochinov <trybeee@gmail.com>
