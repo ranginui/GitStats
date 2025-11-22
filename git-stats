@@ -141,6 +141,17 @@ exectime_internal = 0.0
 exectime_external = 0.0
 time_start = time.time()
 
+def version_sort_key(version_string):
+	"""
+	Create a sort key for version strings like v3.0.0, v25.11.0, etc.
+	Extracts numeric parts for proper version comparison.
+	"""
+	import re
+	# Extract all numeric parts from the version string
+	parts = re.findall(r'\d+', version_string)
+	# Convert to integers for proper numeric comparison
+	return [int(part) for part in parts] if parts else [0]
+
 # Setup logging
 logger = logging.getLogger('gitstats')
 logger.setLevel(logging.INFO)
@@ -2099,14 +2110,14 @@ class HTMLReportCreator(ReportCreator):
 
 		f.write('<table class="tags" id="tags-table">')
 		f.write('<tr>')
-		f.write('<th class="sortable" data-sort="name">Name <span class="sort-arrow"></span></th>')
-		f.write('<th class="sortable" data-sort="date">Date <span class="sort-arrow">▼</span></th>')
+		f.write('<th class="sortable" data-sort="name">Name <span class="sort-arrow">▼</span></th>')
+		f.write('<th class="sortable" data-sort="date">Date <span class="sort-arrow"></span></th>')
 		f.write('<th class="sortable" data-sort="commits">Commits <span class="sort-arrow"></span></th>')
 		f.write('<th class="sortable" data-sort="authors">Authors <span class="sort-arrow"></span></th>')
 		f.write('</tr>')
-		# sort the tags by date desc
-		tags_sorted_by_date_desc = list(map(lambda el : el[1], reversed(sorted(map(lambda el : (el[1]['date'], el[0]), data.tags.items())))))
-		for tag in tags_sorted_by_date_desc:
+		# Sort tags by version (natural sort) instead of date
+		tags_sorted = sorted(data.tags.keys(), key=version_sort_key, reverse=True)
+		for tag in tags_sorted:
 			authorinfo = []
 			authors_by_commits = getkeyssortedbyvalues(data.tags[tag]['authors'])
 			for i in reversed(authors_by_commits):
