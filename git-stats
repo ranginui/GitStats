@@ -2635,8 +2635,10 @@ class GitStats:
 				aggregated.activity_by_year_week[week] = aggregated.activity_by_year_week.get(week, 0) + count
 
 			# Merge domains
-			for domain, count in getattr(repo_data, 'domains', {}).items():
-				aggregated.domains[domain] = aggregated.domains.get(domain, 0) + count
+			for domain, domain_data in getattr(repo_data, 'domains', {}).items():
+				if domain not in aggregated.domains:
+					aggregated.domains[domain] = {'commits': 0}
+				aggregated.domains[domain]['commits'] = aggregated.domains[domain].get('commits', 0) + domain_data.get('commits', 0)
 
 			# Merge timezone data
 			for tz, count in getattr(repo_data, 'commits_by_timezone', {}).items():
