@@ -434,8 +434,8 @@ class GitDataCollector(DataCollector):
 		if not git_filter:
 			has_new_commits, _ = self._get_new_commits(git_branch)
 			if not has_new_commits:
-				logger.info('No new data to collect - using cached data')
-				return
+				logger.info('Repository unchanged since last run')
+				logger.info('Reprocessing with cached git operations for speed')
 
 		# Parse date filters for tag filtering
 		since_stamp = None
