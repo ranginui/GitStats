@@ -1943,6 +1943,74 @@ class GitStats:
 	def __init__(self, args=None):
 		self.args = args
 
+	def _aggregate_data(self, all_data):
+		"""
+		Aggregate data from multiple repositories into a single GitDataCollector.
+		all_data: list of (gitpath, GitDataCollector) tuples
+		"""
+		if not all_data:
+			return GitDataCollector()
+
+		# Start with the first repository's data as the base
+		base_path, aggregated = all_data[0]
+		aggregated.projectname = "Multi-Repository Statistics"
+
+		# Aggregate data from remaining repositories
+		for repo_path, repo_data in all_data[1:]:
+			# Merge authors
+			for author, stats in repo_data.authors.items():
+				if author not in aggregated.authors:
+					aggregated.authors[author] = {
+						'commits': 0,
+						'lines_added': 0,
+						'lines_removed': 0,
+						'first_commit_stamp': stats.get('first_commit_stamp', 0),
+						'last_commit_stamp': stats.get('last_commit_stamp', 0),
+						'last_active_day': stats.get('last_active_day'),
+						'active_days': 0
+					}
+
+				aggregated.authors[author]['commits'] += stats.get('commits', 0)
+				aggregated.authors[author]['lines_added'] += stats.get('lines_added', 0)
+				aggregated.authors[author]['lines_removed'] += stats.get('lines_removed', 0)
+
+				# Update timestamps
+				if stats.get('first_commit_stamp', float('inf')) < aggregated.authors[author].get('first_commit_stamp', float('inf')):
+					aggregated.authors[author]['first_commit_stamp'] = stats['first_commit_stamp']
+				if stats.get('last_commit_stamp', 0) > aggregated.authors[author].get('last_commit_stamp', 0):
+					aggregated.authors[author]['last_commit_stamp'] = stats['last_commit_stamp']
+
+				# Merge active days (take max since they might overlap across repos)
+				if 'active_days' in stats:
+					aggregated.authors[author]['active_days'] = max(
+						aggregated.authors[author].get('active_days', 0),
+						stats['active_days']
+					)
+
+			# Merge simple counters
+			# Note: total_authors will be recalculated from aggregated.authors
+			aggregated.total_lines_added += repo_data.total_lines_added
+			aggregated.total_lines_removed += repo_data.total_lines_removed
+
+			# Merge activity patterns
+			for hour, count in repo_data.activity_by_hour_of_day.items():
+				aggregated.activity_by_hour_of_day[hour] = aggregated.activity_by_hour_of_day.get(hour, 0) + count
+			for day, count in repo_data.activity_by_day_of_week.items():
+				aggregated.activity_by_day_of_week[day] = aggregated.activity_by_day_of_week.get(day, 0) + count
+
+			# Update first/last commit stamps
+			if repo_data.first_commit_stamp > 0:
+				if aggregated.first_commit_stamp == 0 or repo_data.first_commit_stamp < aggregated.first_commit_stamp:
+					aggregated.first_commit_stamp = repo_data.first_commit_stamp
+			if repo_data.last_commit_stamp > aggregated.last_commit_stamp:
+				aggregated.last_commit_stamp = repo_data.last_commit_stamp
+
+		# Recalculate total_authors from unique authors across all repos
+		aggregated.total_authors = len(aggregated.authors)
+
+		logger.info('Aggregated %d unique authors from %d repositories' % (len(aggregated.authors), len(all_data)))
+		return aggregated
+
 	def run(self):
 		# Setup logging handler
 		handler = logging.StreamHandler()
@@ -1968,7 +2036,11 @@ class GitStats:
 				else:
 					conf[key] = value
 
-		gitpath = self.args.gitpath
+		# Collect all repository paths
+		gitpaths = [self.args.gitpath]
+		if self.args.additional_repos:
+			gitpaths.extend(self.args.additional_repos)
+
 		outputpath = os.path.abspath(self.args.outputpath)
 		rundir = os.getcwd()
 
@@ -1980,11 +2052,14 @@ class GitStats:
 			logger.error('FATAL: Output path is not a directory or does not exist')
 			sys.exit(1)
 
-		logger.info('Git path: %s' % gitpath)
+		if len(gitpaths) > 1:
+			logger.info('Aggregating statistics from %d repositories:' % len(gitpaths))
+			for idx, path in enumerate(gitpaths, 1):
+				logger.info('  %d. %s' % (idx, path))
+		else:
+			logger.info('Git path: %s' % gitpaths[0])
 		logger.info('Output path: %s' % outputpath)
 		logger.debug('Configuration: %s' % conf)
-
-		os.chdir(gitpath)
 
 		cachefile = os.path.join(outputpath, 'gitstats.cache')
 
@@ -2007,7 +2082,25 @@ class GitStats:
 		overall_progress.update(1)
 
 		overall_progress.set_description('Phase 2/6: Collecting data')
-		data.collect(gitpath, args=self.args)
+		if len(gitpaths) == 1:
+			# Single repository mode
+			os.chdir(gitpaths[0])
+			data.collect(gitpaths[0], args=self.args)
+		else:
+			# Multi-repository mode - collect and aggregate
+			all_data = []
+			for idx, gitpath in enumerate(gitpaths, 1):
+				logger.info('Collecting data from repository %d/%d: %s' % (idx, len(gitpaths), gitpath))
+				os.chdir(gitpath)
+				repo_data = GitDataCollector()
+				repo_data.collect(gitpath, args=self.args)
+				all_data.append((gitpath, repo_data))
+				os.chdir(rundir)
+
+			# Aggregate all repository data
+			logger.info('Aggregating data from %d repositories...' % len(all_data))
+			data = self._aggregate_data(all_data)
+
 		overall_progress.update(1)
 
 		overall_progress.set_description('Phase 3/6: Refining data')
@@ -2045,6 +2138,9 @@ Examples:
   %(prog)s --author "John Doe" --branch main /path/to/repo /path/to/output
   %(prog)s -c max_authors=50 /path/to/repo /path/to/output
 
+  # Multi-repository statistics
+  %(prog)s /path/to/repo1 --add-repo /path/to/repo2 --add-repo /path/to/repo3 /path/to/output
+
 Configuration keys (use with -c):
   max_authors    - Maximum number of authors to display (default: 20)
   max_domains    - Maximum number of domains to display (default: 10)
@@ -2054,9 +2150,13 @@ Configuration keys (use with -c):
 	)
 
 	parser.add_argument('gitpath', metavar='GITPATH',
-						help='path to git repository')
+						help='path to primary git repository')
 	parser.add_argument('outputpath', metavar='OUTPUTPATH',
 						help='path to output directory')
+
+	# Multi-repository support
+	parser.add_argument('--add-repo', action='append', metavar='PATH', dest='additional_repos',
+						help='additional repository to include in statistics (can be used multiple times)')
 
 	parser.add_argument('--version', action='version', version='%(prog)s ' + __version__)
 
