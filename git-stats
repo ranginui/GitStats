@@ -16,7 +16,7 @@ import sys
 import time
 import traceback
 import zlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from functools import partial
 
 try:
@@ -2748,13 +2748,13 @@ class GitStats:
 
 			flush_cache = getattr(self.args, 'flush', False)
 
-			# Process repositories in parallel using ThreadPoolExecutor
-			# Use threads instead of processes since git operations are I/O bound
+			# Process repositories in parallel using ProcessPoolExecutor
+			# Use processes to avoid directory change conflicts between workers
 			max_workers = min(len(gitpaths), os.cpu_count() or 4)
 			all_data = []
 			errors = []
 
-			with ThreadPoolExecutor(max_workers=max_workers) as executor:
+			with ProcessPoolExecutor(max_workers=max_workers) as executor:
 				# Submit all repository processing tasks
 				future_to_path = {
 					executor.submit(process_repository_worker, gitpath, outputpath, args_dict, flush_cache): gitpath
