@@ -2525,9 +2525,11 @@ class GitStats:
 		base_path, aggregated = all_data[0]
 		aggregated.projectname = "Multi-Repository Statistics"
 
-		# Ensure extensions is initialized
+		# Ensure extensions and tags are initialized
 		if not hasattr(aggregated, 'extensions'):
 			aggregated.extensions = {}
+		if not hasattr(aggregated, 'tags'):
+			aggregated.tags = {}
 
 		# Aggregate data from remaining repositories
 		for repo_path, repo_data in all_data[1:]:
@@ -2579,6 +2581,27 @@ class GitStats:
 						aggregated.extensions[ext] = {'files': 0, 'lines': 0}
 					aggregated.extensions[ext]['files'] += stats.get('files', 0)
 					aggregated.extensions[ext]['lines'] += stats.get('lines', 0)
+
+			# Merge tags data
+			if hasattr(repo_data, 'tags'):
+				for tag, tag_data in repo_data.tags.items():
+					if tag not in aggregated.tags:
+						aggregated.tags[tag] = {
+							'stamp': tag_data.get('stamp', 0),
+							'hash': tag_data.get('hash', ''),
+							'date': tag_data.get('date', ''),
+							'commits': 0,
+							'authors': {}
+						}
+					# Merge commits and authors for this tag
+					aggregated.tags[tag]['commits'] += tag_data.get('commits', 0)
+					for author, commits in tag_data.get('authors', {}).items():
+						aggregated.tags[tag]['authors'][author] = aggregated.tags[tag]['authors'].get(author, 0) + commits
+					# Keep the earliest stamp if tag appears in multiple repos
+					if tag_data.get('stamp', float('inf')) < aggregated.tags[tag].get('stamp', float('inf')):
+						aggregated.tags[tag]['stamp'] = tag_data['stamp']
+						aggregated.tags[tag]['hash'] = tag_data.get('hash', '')
+						aggregated.tags[tag]['date'] = tag_data.get('date', '')
 
 			# Update first/last commit stamps
 			if repo_data.first_commit_stamp > 0:
