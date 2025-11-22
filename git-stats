@@ -373,6 +373,11 @@ class GitDataCollector(DataCollector):
 		}
 		self.commits_by_size = {}  # size_category -> list of commit info
 
+		# Author collaboration metrics
+		self.author_pairs = {}  # (author1, author2) -> { 'files': set(), 'collaboration_count': int }
+		self.knowledge_silos = []  # list of (filename, sole_author, changes)
+		self.collaboration_files = []  # list of (filename, author_count, authors)
+
 		# timezone
 		self.commits_by_timezone = {} # timezone -> commits
 
@@ -787,6 +792,49 @@ class GitDataCollector(DataCollector):
 		# Sort by number of changes (hotspots)
 		self.file_hotspots.sort(key=lambda x: x['changes'], reverse=True)
 
+		# Analyze author collaboration patterns
+		for filename, data in self.file_changes.items():
+			authors_list = list(data['authors'])
+			author_count = len(authors_list)
+
+			# Identify knowledge silos (files with only one author)
+			if author_count == 1:
+				self.knowledge_silos.append({
+					'filename': filename,
+					'author': authors_list[0],
+					'changes': data['changes']
+				})
+			# Identify collaboration files (files with multiple authors)
+			elif author_count > 1:
+				self.collaboration_files.append({
+					'filename': filename,
+					'author_count': author_count,
+					'authors': authors_list,
+					'changes': data['changes']
+				})
+
+				# Track author pairs who collaborate
+				for i in range(len(authors_list)):
+					for j in range(i + 1, len(authors_list)):
+						# Sort authors to ensure consistent pair key
+						author1, author2 = sorted([authors_list[i], authors_list[j]])
+						pair_key = (author1, author2)
+
+						if pair_key not in self.author_pairs:
+							self.author_pairs[pair_key] = {
+								'files': set(),
+								'collaboration_count': 0
+							}
+
+						self.author_pairs[pair_key]['files'].add(filename)
+						self.author_pairs[pair_key]['collaboration_count'] = len(self.author_pairs[pair_key]['files'])
+
+		# Sort collaboration files by author count (most collaborative first)
+		self.collaboration_files.sort(key=lambda x: x['author_count'], reverse=True)
+
+		# Sort knowledge silos by number of changes (most changed silos first)
+		self.knowledge_silos.sort(key=lambda x: x['changes'], reverse=True)
+
 	def getActiveDays(self):
 		return self.active_days
 
@@ -1196,6 +1244,71 @@ class HTMLReportCreator(ReportCreator):
 			next = ', '.join(authors[1:5])
 			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td></tr>' % (yy, authors[0], commits, (100.0 * commits) / data.commits_by_year[yy], data.commits_by_year[yy], next))
 		f.write('</table>')
+
+		# Author Collaboration Analysis
+		f.write(html_header(2, 'Author Collaboration Analysis'))
+
+		# Collaboration overview
+		total_files = len(data.file_changes)
+		collab_file_count = len(data.collaboration_files)
+		silo_file_count = len(data.knowledge_silos)
+		if total_files > 0:
+			f.write('<dl>\n')
+			f.write('<dt>Total files analyzed</dt><dd>%d</dd>\n' % total_files)
+			f.write('<dt>Collaboration files (multiple authors)</dt><dd>%d (%.1f%%)</dd>\n' %
+				(collab_file_count, 100.0 * collab_file_count / total_files))
+			f.write('<dt>Knowledge silos (single author)</dt><dd>%d (%.1f%%)</dd>\n' %
+				(silo_file_count, 100.0 * silo_file_count / total_files))
+			f.write('<dt>Author pairs collaborating</dt><dd>%d</dd>\n' % len(data.author_pairs))
+			f.write('</dl>\n')
+
+		# Top collaboration pairs
+		if len(data.author_pairs) > 0:
+			f.write(html_header(3, 'Top Collaboration Pairs'))
+			f.write('<table class="sortable" id="collab_pairs">')
+			f.write('<tr><th>Author 1</th><th>Author 2</th><th>Shared Files</th></tr>')
+
+			# Sort by collaboration count
+			sorted_pairs = sorted(data.author_pairs.items(),
+				key=lambda x: x[1]['collaboration_count'], reverse=True)
+
+			for (author1, author2), metrics in sorted_pairs[:20]:
+				f.write('<tr><td>%s</td><td>%s</td><td>%d</td></tr>\n' %
+					(author1, author2, metrics['collaboration_count']))
+			f.write('</table>\n')
+
+		# Most collaborative files
+		if len(data.collaboration_files) > 0:
+			f.write(html_header(3, 'Most Collaborative Files'))
+			f.write('<table class="sortable" id="collab_files">')
+			f.write('<tr><th>File</th><th>Authors</th><th>Changes</th></tr>')
+
+			# Sort by author count, then by changes
+			sorted_collab = sorted(data.collaboration_files,
+				key=lambda x: (x['author_count'], x['changes']), reverse=True)
+
+			for file_info in sorted_collab[:30]:
+				authors_str = ', '.join(file_info['authors'][:5])
+				if len(file_info['authors']) > 5:
+					authors_str += ', ...'
+				f.write('<tr><td>%s</td><td>%d (%s)</td><td>%d</td></tr>\n' %
+					(file_info['filename'], file_info['author_count'], authors_str, file_info['changes']))
+			f.write('</table>\n')
+
+		# Knowledge silos
+		if len(data.knowledge_silos) > 0:
+			f.write(html_header(3, 'Knowledge Silos (Single Author Files)'))
+			f.write('<table class="sortable" id="knowledge_silos">')
+			f.write('<tr><th>File</th><th>Author</th><th>Changes</th></tr>')
+
+			# Sort by changes
+			sorted_silos = sorted(data.knowledge_silos,
+				key=lambda x: x['changes'], reverse=True)
+
+			for file_info in sorted_silos[:30]:
+				f.write('<tr><td>%s</td><td>%s</td><td>%d</td></tr>\n' %
+					(file_info['filename'], file_info['author'], file_info['changes']))
+			f.write('</table>\n')
 
 		# Domains
 		f.write(html_header(2, 'Commits by Domains'))
