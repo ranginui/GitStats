@@ -176,6 +176,37 @@ def getpipeoutput(cmds, quiet = False):
 	exectime_external += (end - start)
 	return output.decode('utf-8', errors='replace').rstrip('\n')
 
+def getpipeoutput_streaming(cmds, quiet=False):
+	"""
+	Memory-efficient version of getpipeoutput that yields lines instead of
+	loading entire output into memory. Use for large git outputs.
+	"""
+	global exectime_external
+	start = time.time()
+	if not quiet and ON_LINUX and os.isatty(1):
+		print('>> ' + ' | '.join(cmds), end=' ')
+		sys.stdout.flush()
+
+	p0 = subprocess.Popen(cmds[0], stdout=subprocess.PIPE, shell=True, bufsize=1, universal_newlines=True)
+	p = p0
+	for x in cmds[1:]:
+		p = subprocess.Popen(x, stdin=p0.stdout, stdout=subprocess.PIPE, shell=True, bufsize=1, universal_newlines=True)
+		p0.stdout.close()  # Allow p0 to receive SIGPIPE if p exits
+		p0 = p
+
+	try:
+		for line in p.stdout:
+			yield line.rstrip('\n')
+	finally:
+		p.stdout.close()
+		p.wait()
+		end = time.time()
+		if not quiet:
+			if ON_LINUX and os.isatty(1):
+				print('\r', end=' ')
+			print('[%.5f] >> %s' % (end - start, ' | '.join(cmds)))
+		exectime_external += (end - start)
+
 def getkeyssortedbyvalues(dict):
 	return list(map(lambda el : el[1], sorted(map(lambda el : (el[1], el[0]), dict.items()))))
 
@@ -192,9 +223,17 @@ def getversion():
 
 class DataCollector:
 	"""Manages data collection from a revision control repository."""
+	CACHE_VERSION = 2  # Increment when cache structure changes
+
 	def __init__(self):
 		self.stamp_created = time.time()
 		self.cache = {}
+		self.cache_metadata = {
+			'version': self.CACHE_VERSION,
+			'last_commit_hash': None,
+			'repository_path': None,
+			'last_update': None
+		}
 	
 	##
 	# This should be the main function to extract data from the repository.
@@ -210,11 +249,44 @@ class DataCollector:
 		logger.info('Loading cache...')
 		with open(cachefile, 'rb') as f:
 			try:
-				self.cache = pickle.loads(zlib.decompress(f.read()))
+				cache_data = pickle.loads(zlib.decompress(f.read()))
 			except Exception:
 				# temporary hack to upgrade non-compressed caches
 				f.seek(0)
-				self.cache = pickle.load(f)
+				try:
+					cache_data = pickle.load(f)
+				except Exception as e:
+					logger.warning('Failed to load cache: %s' % str(e))
+					return
+
+		# Handle old cache format (dict) vs new format (tuple with metadata)
+		if isinstance(cache_data, dict):
+			# Old cache format - no metadata
+			self.cache = cache_data
+			logger.info('Loaded old cache format (will be upgraded on save)')
+		elif isinstance(cache_data, tuple) and len(cache_data) == 2:
+			# New cache format with metadata
+			self.cache, self.cache_metadata = cache_data
+			cache_version = self.cache_metadata.get('version', 1)
+
+			# Validate cache version
+			if cache_version != self.CACHE_VERSION:
+				logger.warning('Cache version mismatch (cache: %d, current: %d) - invalidating cache' %
+					(cache_version, self.CACHE_VERSION))
+				self.cache = {}
+				self.cache_metadata = {
+					'version': self.CACHE_VERSION,
+					'last_commit_hash': None,
+					'repository_path': None,
+					'last_update': None
+				}
+			else:
+				logger.info('Loaded cache from last commit: %s' %
+					(self.cache_metadata.get('last_commit_hash', 'unknown')[:7]
+					 if self.cache_metadata.get('last_commit_hash') else 'none'))
+		else:
+			logger.warning('Unknown cache format - invalidating cache')
+			self.cache = {}
 	
 	##
 	# Produce any additional statistics from the extracted data.
@@ -269,10 +341,18 @@ class DataCollector:
 	# Save cacheable data
 	def saveCache(self, cachefile):
 		logger.info('Saving cache...')
+		# Update metadata timestamp
+		self.cache_metadata['last_update'] = time.time()
+
 		with open(cachefile, 'wb') as f:
-			#pickle.dump(self.cache, f)
-			data = zlib.compress(pickle.dumps(self.cache))
+			# Save as tuple: (cache_dict, metadata_dict)
+			cache_data = (self.cache, self.cache_metadata)
+			data = zlib.compress(pickle.dumps(cache_data))
 			f.write(data)
+
+		if self.cache_metadata.get('last_commit_hash'):
+			logger.info('Cache saved with last commit: %s' %
+				self.cache_metadata['last_commit_hash'][:7])
 
 class GitDataCollector(DataCollector):
 	def _build_git_log_filter(self, args):
@@ -290,6 +370,52 @@ class GitDataCollector(DataCollector):
 			branch = 'HEAD'
 		return ' '.join(filters), branch
 
+	def _get_new_commits(self, git_branch='HEAD'):
+		"""
+		Check if there are new commits since last cache update.
+		Returns (has_new_commits, commit_range_filter)
+		"""
+		last_commit = self.cache_metadata.get('last_commit_hash')
+
+		if not last_commit:
+			# No previous cache, process all commits
+			logger.info('No previous cache found - will process all commits')
+			return True, ''
+
+		# Check if last_commit still exists in the repository
+		try:
+			getpipeoutput(['git cat-file -e %s' % last_commit])
+		except Exception:
+			logger.warning('Last cached commit %s not found - will process all commits' % last_commit[:7])
+			return True, ''
+
+		# Get current HEAD
+		try:
+			current_head = getpipeoutput(['git rev-parse %s' % git_branch]).strip()
+		except Exception:
+			logger.warning('Could not determine current HEAD - will process all commits')
+			return True, ''
+
+		if current_head == last_commit:
+			logger.info('Repository unchanged since last run (at %s)' % current_head[:7])
+			return False, ''
+
+		# Count new commits
+		try:
+			new_commit_count = int(getpipeoutput(['git rev-list --count %s..%s' % (last_commit, git_branch)]).strip())
+		except Exception:
+			new_commit_count = 0
+
+		if new_commit_count == 0:
+			logger.info('No new commits to process')
+			return False, ''
+
+		logger.info('Found %d new commits since last run (%s..%s)' %
+			(new_commit_count, last_commit[:7], current_head[:7]))
+
+		# Return filter to only process new commits
+		return True, '%s..%s' % (last_commit, git_branch)
+
 	def collect(self, dir, args=None):
 		DataCollector.collect(self, dir)
 
@@ -301,6 +427,15 @@ class GitDataCollector(DataCollector):
 
 		logger.debug('Git filter: %s' % git_filter if git_filter else 'Git filter: (none)')
 		logger.debug('Git branch: %s' % git_branch)
+
+		# Check for incremental update opportunity
+		# Note: User-specified filters override incremental mode
+		has_new_commits = True
+		if not git_filter:
+			has_new_commits, _ = self._get_new_commits(git_branch)
+			if not has_new_commits:
+				logger.info('No new data to collect - using cached data')
+				return
 
 		# Parse date filters for tag filtering
 		since_stamp = None
@@ -766,6 +901,15 @@ class GitDataCollector(DataCollector):
 					self.file_changes[filename]['lines_changed'] += added + deleted
 				except (ValueError, IndexError):
 					pass
+
+		# Save current commit hash for incremental updates
+		try:
+			current_head = getpipeoutput(['git rev-parse %s' % git_branch]).strip()
+			self.cache_metadata['last_commit_hash'] = current_head
+			self.cache_metadata['repository_path'] = os.path.abspath(dir)
+			logger.debug('Saved current HEAD for incremental updates: %s' % current_head[:7])
+		except Exception as e:
+			logger.warning('Could not save current HEAD: %s' % str(e))
 
 	def refine(self):
 		# authors
