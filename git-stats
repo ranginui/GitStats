@@ -673,9 +673,18 @@ class GitDataCollector(DataCollector):
 		# collect info on tags, starting from latest
 		tags_sorted_by_date_desc = list(map(lambda el : el[1], reversed(sorted(map(lambda el : (el[1]['date'], el[0]), self.tags.items())))))
 		prev = None
+		prev_major_version = None
 		if len(tags_sorted_by_date_desc) > 0:
 			logger.debug('Collecting statistics for %d filtered tags' % len(tags_sorted_by_date_desc))
 		for tag in reversed(tags_sorted_by_date_desc):
+			# Check if major version changed - if so, reset comparison
+			current_major_version = self.getTagMajorVersion(tag)
+			if current_major_version and current_major_version != prev_major_version:
+				# Major version changed, reset prev to start new series
+				prev = None
+				prev_major_version = current_major_version
+				logger.debug('Starting new version series: %s' % current_major_version)
+
 			cmd = 'git shortlog -s "%s"' % tag
 			if prev != None:
 				cmd += ' "^%s"' % prev
@@ -1204,6 +1213,22 @@ class GitDataCollector(DataCollector):
 		lines = getpipeoutput(['git show-ref --tags', 'cut -d/ -f3'])
 		return lines.split('\n')
 	
+	def getTagMajorVersion(self, tag):
+		"""
+		Extract major version from tag name (e.g., '24.11' from 'v24.11.00' or '24.11.00').
+		Returns None if version pattern cannot be extracted.
+		"""
+		# Remove common prefixes
+		tag_clean = tag.lstrip('vV')
+
+		# Try to match version pattern like 24.11.00, 3.22.01, etc.
+		# Looking for: number.number at the start
+		match = re.match(r'^(\d+\.\d+)', tag_clean)
+		if match:
+			return match.group(1)
+
+		return None
+
 	def getTagDate(self, tag):
 		return self.revToDate('tags/' + tag)
 	
