@@ -2010,8 +2010,13 @@ class HTMLReportCreator(ReportCreator):
 			f.write('<dt>Average commits per tag</dt><dd>%.2f</dd>' % (1.0 * data.getTotalCommits() / len(data.tags)))
 		f.write('</dl>')
 
-		f.write('<table class="tags">')
-		f.write('<tr><th>Name</th><th>Date</th><th>Commits</th><th>Authors</th></tr>')
+		f.write('<table class="tags" id="tags-table">')
+		f.write('<tr>')
+		f.write('<th class="sortable" data-sort="name">Name <span class="sort-arrow"></span></th>')
+		f.write('<th class="sortable" data-sort="date">Date <span class="sort-arrow">▼</span></th>')
+		f.write('<th class="sortable" data-sort="commits">Commits <span class="sort-arrow"></span></th>')
+		f.write('<th class="sortable" data-sort="authors">Authors <span class="sort-arrow"></span></th>')
+		f.write('</tr>')
 		# sort the tags by date desc
 		tags_sorted_by_date_desc = list(map(lambda el : el[1], reversed(sorted(map(lambda el : (el[1]['date'], el[0]), data.tags.items())))))
 		for tag in tags_sorted_by_date_desc:
@@ -2019,8 +2024,84 @@ class HTMLReportCreator(ReportCreator):
 			authors_by_commits = getkeyssortedbyvalues(data.tags[tag]['authors'])
 			for i in reversed(authors_by_commits):
 				authorinfo.append('%s (%d)' % (i, data.tags[tag]['authors'][i]))
-			f.write('<tr><td>%s</td><td>%s</td><td>%d</td><td>%s</td></tr>' % (tag, data.tags[tag]['date'], data.tags[tag]['commits'], ', '.join(authorinfo)))
+			# Add data attributes for easier sorting
+			f.write('<tr>')
+			f.write('<td data-sort-value="%s">%s</td>' % (tag.lower(), tag))
+			f.write('<td data-sort-value="%s">%s</td>' % (data.tags[tag]['date'], data.tags[tag]['date']))
+			f.write('<td data-sort-value="%d">%d</td>' % (data.tags[tag]['commits'], data.tags[tag]['commits']))
+			f.write('<td data-sort-value="%d">%s</td>' % (len(data.tags[tag]['authors']), ', '.join(authorinfo)))
+			f.write('</tr>')
 		f.write('</table>')
+
+		# Add JavaScript for table sorting
+		f.write('''
+<script>
+(function() {
+	const table = document.getElementById('tags-table');
+	if (!table) return;
+
+	const headers = table.querySelectorAll('th.sortable');
+	let currentSort = { column: null, direction: 'desc' };
+
+	function sortTable(columnIndex, dataType) {
+		const tbody = table.querySelector('tbody') || table;
+		const rows = Array.from(tbody.querySelectorAll('tr')).slice(1); // Skip header row
+
+		// Determine sort direction
+		const header = headers[columnIndex];
+		const isCurrentColumn = currentSort.column === columnIndex;
+		const direction = isCurrentColumn && currentSort.direction === 'asc' ? 'desc' : 'asc';
+
+		// Sort rows
+		rows.sort((a, b) => {
+			const aCell = a.cells[columnIndex];
+			const bCell = b.cells[columnIndex];
+
+			let aVal = aCell.getAttribute('data-sort-value') || aCell.textContent;
+			let bVal = bCell.getAttribute('data-sort-value') || bCell.textContent;
+
+			// Convert to numbers for numeric columns
+			if (dataType === 'commits' || dataType === 'authors') {
+				aVal = parseInt(aVal) || 0;
+				bVal = parseInt(bVal) || 0;
+			}
+
+			if (aVal < bVal) return direction === 'asc' ? -1 : 1;
+			if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+			return 0;
+		});
+
+		// Update table
+		rows.forEach(row => tbody.appendChild(row));
+
+		// Update sort arrows
+		headers.forEach((h, i) => {
+			const arrow = h.querySelector('.sort-arrow');
+			if (i === columnIndex) {
+				arrow.textContent = direction === 'asc' ? '▲' : '▼';
+			} else {
+				arrow.textContent = '';
+			}
+		});
+
+		currentSort = { column: columnIndex, direction: direction };
+	}
+
+	// Add click handlers to headers
+	headers.forEach((header, index) => {
+		header.style.cursor = 'pointer';
+		header.style.userSelect = 'none';
+		header.addEventListener('click', function() {
+			const dataType = this.getAttribute('data-sort');
+			sortTable(index, dataType);
+		});
+	});
+
+	// Initial sort by date descending (already sorted from Python)
+	currentSort = { column: 1, direction: 'desc' };
+})();
+</script>
+''')
 
 		f.write('</body></html>')
 		f.close()
