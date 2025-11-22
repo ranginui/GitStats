@@ -358,6 +358,10 @@ class GitDataCollector(DataCollector):
 		self.max_net_growth_day = (None, 0) # (date, net_growth)
 		self.refactoring_periods = [] # list of (date, churn_ratio, net_change) where heavy refactoring occurred
 
+		# File volatility metrics
+		self.file_changes = {} # filename -> { 'changes': count, 'authors': set(), 'last_change': stamp, 'lines_changed': total }
+		self.file_hotspots = [] # list of (filename, change_count) sorted by changes
+
 		# timezone
 		self.commits_by_timezone = {} # timezone -> commits
 
@@ -637,7 +641,53 @@ class GitDataCollector(DataCollector):
 				#self.changes_by_date[stamp] = { 'files': files, 'ins': inserted, 'del': deleted }
 		pbar.close()
 		self.total_lines = total_lines
-	
+
+		# Collect file volatility metrics
+		# Use git log --numstat to get per-file changes
+		logger.info('Analyzing file volatility...')
+		cmd = 'git log %s %s --numstat --pretty=format:"%%at %%an"' % (git_filter, git_branch)
+		lines = getpipeoutput([cmd]).split('\n')
+
+		current_stamp = None
+		current_author = None
+		for line in tqdm(lines, desc='Processing file changes', unit='lines', disable=logger.level > logging.INFO):
+			if len(line) == 0:
+				continue
+
+			# Check if this is a commit line (stamp author)
+			if not line.startswith('\t') and line.find('\t') == -1:
+				parts = line.split(' ', 1)
+				if len(parts) >= 2:
+					try:
+						current_stamp = int(parts[0])
+						current_author = parts[1]
+					except ValueError:
+						pass
+				continue
+
+			# This is a file change line: "added\tdeleted\tfilename"
+			parts = line.split('\t')
+			if len(parts) >= 3:
+				try:
+					added = int(parts[0]) if parts[0] != '-' else 0
+					deleted = int(parts[1]) if parts[1] != '-' else 0
+					filename = parts[2]
+
+					if filename not in self.file_changes:
+						self.file_changes[filename] = {
+							'changes': 0,
+							'authors': set(),
+							'last_change': 0,
+							'lines_changed': 0
+						}
+
+					self.file_changes[filename]['changes'] += 1
+					self.file_changes[filename]['authors'].add(current_author)
+					self.file_changes[filename]['last_change'] = max(self.file_changes[filename]['last_change'], current_stamp or 0)
+					self.file_changes[filename]['lines_changed'] += added + deleted
+				except (ValueError, IndexError):
+					pass
+
 	def refine(self):
 		# authors
 		# name -> {place_by_commits, commits_frac, date_first, date_last, timedelta}
@@ -682,6 +732,22 @@ class GitDataCollector(DataCollector):
 
 		# Sort refactoring periods by churn ratio (highest first)
 		self.refactoring_periods.sort(key=lambda x: x[1], reverse=True)
+
+		# Analyze file volatility and create hotspots list
+		self.file_hotspots = []
+		for filename, data in self.file_changes.items():
+			# Convert authors set to count for sorting
+			author_count = len(data['authors'])
+			self.file_hotspots.append({
+				'filename': filename,
+				'changes': data['changes'],
+				'authors': author_count,
+				'last_change': data['last_change'],
+				'lines_changed': data['lines_changed']
+			})
+
+		# Sort by number of changes (hotspots)
+		self.file_hotspots.sort(key=lambda x: x['changes'], reverse=True)
 
 	def getActiveDays(self):
 		return self.active_days
@@ -1108,6 +1174,48 @@ class HTMLReportCreator(ReportCreator):
 			lines = data.extensions[ext]['lines']
 			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td><td>%d (%.2f%%)</td><td>%d</td></tr>' % (ext, files, (100.0 * files) / data.getTotalFiles(), lines, (100.0 * lines) / data.getTotalLOC(), lines // files))
 		f.write('</table>')
+
+		# File Volatility Analysis
+		if len(data.file_hotspots) > 0:
+			f.write(html_header(2, 'File Volatility Analysis'))
+
+			# Hotspots (most frequently changed files)
+			f.write(html_header(3, 'File Hotspots (Most Frequently Changed)'))
+			f.write('<p>Files that change frequently may indicate areas of high activity or instability.</p>\n')
+			f.write('<table class="sortable" id="file_hotspots"><tr>')
+			f.write('<th>File</th><th>Changes</th><th>Authors</th><th>Lines Changed</th><th>Last Modified</th></tr>\n')
+			for hotspot in data.file_hotspots[:20]:
+				last_change_date = datetime.datetime.fromtimestamp(hotspot['last_change']).strftime('%Y-%m-%d') if hotspot['last_change'] > 0 else 'N/A'
+				f.write('<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>\n' %
+					(hotspot['filename'], hotspot['changes'], hotspot['authors'],
+					 hotspot['lines_changed'], last_change_date))
+			f.write('</table>\n')
+
+			# Collaboration hotspots (files with most authors)
+			collaboration_spots = sorted(data.file_hotspots, key=lambda x: x['authors'], reverse=True)[:20]
+			if len(collaboration_spots) > 0 and collaboration_spots[0]['authors'] > 1:
+				f.write(html_header(3, 'Collaboration Hotspots (Most Authors per File)'))
+				f.write('<p>Files edited by many authors may indicate shared ownership or knowledge areas.</p>\n')
+				f.write('<table class="sortable" id="collab_hotspots"><tr>')
+				f.write('<th>File</th><th>Authors</th><th>Changes</th><th>Lines Changed</th></tr>\n')
+				for hotspot in collaboration_spots:
+					if hotspot['authors'] > 1:
+						f.write('<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>\n' %
+							(hotspot['filename'], hotspot['authors'], hotspot['changes'],
+							 hotspot['lines_changed']))
+				f.write('</table>\n')
+
+			# Churn champions (files with most lines changed)
+			churn_champions = sorted(data.file_hotspots, key=lambda x: x['lines_changed'], reverse=True)[:20]
+			f.write(html_header(3, 'Churn Champions (Most Lines Changed)'))
+			f.write('<p>Files with the highest total line changes (additions + deletions).</p>\n')
+			f.write('<table class="sortable" id="churn_champions"><tr>')
+			f.write('<th>File</th><th>Lines Changed</th><th>Changes</th><th>Authors</th></tr>\n')
+			for hotspot in churn_champions:
+				f.write('<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>\n' %
+					(hotspot['filename'], hotspot['lines_changed'], hotspot['changes'],
+					 hotspot['authors']))
+			f.write('</table>\n')
 
 		f.write('</body></html>')
 		f.close()
