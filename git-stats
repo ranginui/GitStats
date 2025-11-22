@@ -249,9 +249,13 @@ class DataCollector:
 		# Store cachefile path for progressive saves
 		self.cachefile = cachefile
 
-		# If flush is requested, skip loading and start fresh
+		# If flush is requested, delete old cache and start fresh
 		if flush:
-			logger.info('Cache flush requested - starting fresh rebuild')
+			if os.path.exists(cachefile):
+				os.remove(cachefile)
+				logger.info('Cache flush requested - deleted old cache, starting fresh rebuild')
+			else:
+				logger.info('Cache flush requested - starting fresh rebuild')
 			return
 
 		if not os.path.exists(cachefile):
