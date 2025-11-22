@@ -362,6 +362,17 @@ class GitDataCollector(DataCollector):
 		self.file_changes = {} # filename -> { 'changes': count, 'authors': set(), 'last_change': stamp, 'lines_changed': total }
 		self.file_hotspots = [] # list of (filename, change_count) sorted by changes
 
+		# Commit size distribution
+		self.commit_sizes = [] # list of (commit_hash, size_category, lines_changed, files_changed)
+		self.size_categories = {
+			'tiny': 0,      # 1-10 lines
+			'small': 0,     # 11-50 lines
+			'medium': 0,    # 51-200 lines
+			'large': 0,     # 201-500 lines
+			'huge': 0       # 500+ lines
+		}
+		self.commits_by_size = {}  # size_category -> list of commit info
+
 		# timezone
 		self.commits_by_timezone = {} # timezone -> commits
 
@@ -622,6 +633,33 @@ class GitDataCollector(DataCollector):
 							self.churn_by_month[month_str]['removed'] += deleted
 							self.churn_by_month[month_str]['net'] = self.churn_by_month[month_str]['added'] - self.churn_by_month[month_str]['removed']
 							self.churn_by_month[month_str]['churn'] = self.churn_by_month[month_str]['added'] + self.churn_by_month[month_str]['removed']
+
+							# Track commit size distribution
+							total_changes = inserted + deleted
+							if total_changes > 0:
+								# Categorize commit by size
+								if total_changes <= 10:
+									category = 'tiny'
+								elif total_changes <= 50:
+									category = 'small'
+								elif total_changes <= 200:
+									category = 'medium'
+								elif total_changes <= 500:
+									category = 'large'
+								else:
+									category = 'huge'
+
+								self.size_categories[category] += 1
+								commit_info = {
+									'stamp': stamp,
+									'author': author,
+									'files': files,
+									'lines': total_changes,
+									'category': category
+								}
+								if category not in self.commits_by_size:
+									self.commits_by_size[category] = []
+								self.commits_by_size[category].append(commit_info)
 
 					except ValueError:
 						logger.debug('Unexpected line "%s"' % line)
@@ -1059,6 +1097,54 @@ class HTMLReportCreator(ReportCreator):
 			r = 127 + int((float(commits) / max_commits_on_tz) * 128)
 			f.write('<tr><th>%s</th><td style="background-color: rgb(%d, 0, 0)">%d</td></tr>' % (i, r, commits))
 		f.write('</tr></table>')
+
+		# Commit Size Distribution
+		total_commits = sum(data.size_categories.values())
+		if total_commits > 0:
+			f.write(html_header(2, 'Commit Size Distribution'))
+			f.write('<p>Distribution of commits by number of lines changed:</p>\n')
+			f.write('<dl>\n')
+			f.write('<dt>Tiny (1-10 lines)</dt><dd>%d commits (%.1f%%)</dd>\n' %
+				(data.size_categories['tiny'], 100.0 * data.size_categories['tiny'] / total_commits))
+			f.write('<dt>Small (11-50 lines)</dt><dd>%d commits (%.1f%%)</dd>\n' %
+				(data.size_categories['small'], 100.0 * data.size_categories['small'] / total_commits))
+			f.write('<dt>Medium (51-200 lines)</dt><dd>%d commits (%.1f%%)</dd>\n' %
+				(data.size_categories['medium'], 100.0 * data.size_categories['medium'] / total_commits))
+			f.write('<dt>Large (201-500 lines)</dt><dd>%d commits (%.1f%%)</dd>\n' %
+				(data.size_categories['large'], 100.0 * data.size_categories['large'] / total_commits))
+			f.write('<dt>Huge (500+ lines)</dt><dd>%d commits (%.1f%%)</dd>\n' %
+				(data.size_categories['huge'], 100.0 * data.size_categories['huge'] / total_commits))
+			f.write('</dl>\n')
+
+			# Show largest commits
+			if 'huge' in data.commits_by_size and len(data.commits_by_size['huge']) > 0:
+				f.write(html_header(3, 'Largest Commits'))
+				huge_commits = sorted(data.commits_by_size['huge'], key=lambda x: x['lines'], reverse=True)[:10]
+				f.write('<table class="sortable" id="huge_commits"><tr>')
+				f.write('<th>Date</th><th>Author</th><th>Lines Changed</th><th>Files</th></tr>\n')
+				for commit in huge_commits:
+					commit_date = datetime.datetime.fromtimestamp(commit['stamp']).strftime('%Y-%m-%d')
+					f.write('<tr><td>%s</td><td>%s</td><td>%d</td><td>%d</td></tr>\n' %
+						(commit_date, commit['author'], commit['lines'], commit['files']))
+				f.write('</table>\n')
+
+			# Average commit size by author
+			f.write(html_header(3, 'Average Commit Size by Author'))
+			author_avg_size = []
+			for author, author_data in data.authors.items():
+				commits = author_data.get('commits', 0)
+				if commits > 0:
+					churn = author_data.get('churn', 0)
+					avg_size = churn / commits
+					author_avg_size.append((author, commits, churn, avg_size))
+
+			author_avg_size.sort(key=lambda x: x[3], reverse=True)
+			f.write('<table class="sortable" id="author_commit_size"><tr>')
+			f.write('<th>Author</th><th>Commits</th><th>Total Lines</th><th>Avg per Commit</th></tr>\n')
+			for author, commits, total, avg in author_avg_size[:20]:
+				f.write('<tr><td>%s</td><td>%d</td><td>%d</td><td>%.1f</td></tr>\n' %
+					(author, commits, total, avg))
+			f.write('</table>\n')
 
 		f.write('</body></html>')
 		f.close()
