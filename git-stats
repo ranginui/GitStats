@@ -1126,9 +1126,11 @@ class GitDataCollector(DataCollector):
 		for i, name in enumerate(authors_by_commits):
 			self.authors[name]['place_by_commits'] = i + 1
 
+		total_commits = self.getTotalCommits()
 		for name in list(self.authors.keys()):
 			a = self.authors[name]
-			a['commits_frac'] = (100 * float(a['commits'])) / self.getTotalCommits()
+			# Avoid division by zero if no commits were collected
+			a['commits_frac'] = (100 * float(a['commits'])) / total_commits if total_commits > 0 else 0
 			date_first = datetime.datetime.fromtimestamp(a['first_commit_stamp'])
 			date_last = datetime.datetime.fromtimestamp(a['last_commit_stamp'])
 			delta = date_last - date_first
@@ -1378,7 +1380,12 @@ class HTMLReportCreator(ReportCreator):
 		f.write('<dt>Age</dt><dd>%d days, %d active days (%3.2f%%)</dd>' % (data.getCommitDeltaDays(), len(data.getActiveDays()), (100.0 * len(data.getActiveDays()) / data.getCommitDeltaDays())))
 		f.write('<dt>Total Files</dt><dd>%s</dd>' % data.getTotalFiles())
 		f.write('<dt>Total Lines of Code</dt><dd>%s (%d added, %d removed)</dd>' % (data.getTotalLOC(), data.total_lines_added, data.total_lines_removed))
-		f.write('<dt>Total Commits</dt><dd>%s (average %.1f commits per active day, %.1f per all days)</dd>' % (data.getTotalCommits(), float(data.getTotalCommits()) / len(data.getActiveDays()), float(data.getTotalCommits()) / data.getCommitDeltaDays()))
+		total_commits = data.getTotalCommits()
+		active_days = len(data.getActiveDays())
+		delta_days = data.getCommitDeltaDays()
+		avg_per_active = float(total_commits) / active_days if active_days > 0 else 0
+		avg_per_all = float(total_commits) / delta_days if delta_days > 0 else 0
+		f.write('<dt>Total Commits</dt><dd>%s (average %.1f commits per active day, %.1f per all days)</dd>' % (total_commits, avg_per_active, avg_per_all))
 		f.write('<dt>Authors</dt><dd>%s</dd>' % data.getTotalAuthors())
 		f.write('</dl>')
 
@@ -1542,11 +1549,13 @@ class HTMLReportCreator(ReportCreator):
 		f.write(html_header(2, 'Month of Year'))
 		f.write('<div class="vtable"><table>')
 		f.write('<tr><th>Month</th><th>Commits (%)</th></tr>')
+		total_commits = data.getTotalCommits()
 		for mm in range(1, 13):
 			commits = 0
 			if mm in data.activity_by_month_of_year:
 				commits = data.activity_by_month_of_year[mm]
-			f.write('<tr><td>%d</td><td>%d (%.2f %%)</td></tr>' % (mm, commits, (100.0 * commits) / data.getTotalCommits()))
+			pct = (100.0 * commits) / total_commits if total_commits > 0 else 0
+			f.write('<tr><td>%d</td><td>%d (%.2f %%)</td></tr>' % (mm, commits, pct))
 		f.write('</table></div>')
 
 		# Interactive Chart.js version
@@ -1587,8 +1596,10 @@ class HTMLReportCreator(ReportCreator):
 		# Commits by year
 		f.write(html_header(2, 'Commits by Year'))
 		f.write('<div class="vtable"><table><tr><th>Year</th><th>Commits (% of all)</th></tr>')
+		total_commits = data.getTotalCommits()
 		for yy in reversed(sorted(list(data.commits_by_year.keys()))):
-			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td></tr>' % (yy, data.commits_by_year[yy], (100.0 * data.commits_by_year[yy]) / data.getTotalCommits()))
+			pct = (100.0 * data.commits_by_year[yy]) / total_commits if total_commits > 0 else 0
+			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td></tr>' % (yy, data.commits_by_year[yy], pct))
 		f.write('</table></div>')
 
 		# Interactive Chart.js version
@@ -2006,7 +2017,7 @@ class HTMLReportCreator(ReportCreator):
 
 		f.write('<dl>')
 		f.write('<dt>Total tags</dt><dd>%d</dd>' % len(data.tags))
-		if len(data.tags) > 0:
+		if len(data.tags) > 0 and data.getTotalCommits() > 0:
 			f.write('<dt>Average commits per tag</dt><dd>%.2f</dd>' % (1.0 * data.getTotalCommits() / len(data.tags)))
 		f.write('</dl>')
 
