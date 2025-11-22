@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
@@ -1086,11 +1087,15 @@ class GitDataCollector(DataCollector):
 		# Save current commit hash for incremental updates
 		try:
 			current_head = getpipeoutput(['git rev-parse %s' % git_branch]).strip()
-			self.cache_metadata['last_commit_hash'] = current_head
-			self.cache_metadata['repository_path'] = os.path.abspath(dir)
-			logger.debug('Saved current HEAD for incremental updates: %s' % current_head[:7])
+			if current_head:
+				self.cache_metadata['last_commit_hash'] = current_head
+				self.cache_metadata['repository_path'] = os.path.abspath(dir)
+				logger.info('Saved current HEAD for incremental updates: %s' % current_head[:7])
+			else:
+				logger.warning('git rev-parse returned empty result - cannot save HEAD for incremental updates')
 		except Exception as e:
 			logger.warning('Could not save current HEAD: %s' % str(e))
+			logger.debug('Traceback: %s' % traceback.format_exc())
 
 	def refine(self):
 		# authors
