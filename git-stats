@@ -223,7 +223,7 @@ def getversion():
 
 class DataCollector:
 	"""Manages data collection from a revision control repository."""
-	CACHE_VERSION = 2  # Increment when cache structure changes
+	CACHE_VERSION = 3  # Increment when cache structure changes (v3: full data caching for incremental updates)
 
 	def __init__(self):
 		self.stamp_created = time.time()
@@ -243,7 +243,12 @@ class DataCollector:
 	
 	##
 	# Load cacheable data
-	def loadCache(self, cachefile):
+	def loadCache(self, cachefile, flush=False):
+		# If flush is requested, skip loading and start fresh
+		if flush:
+			logger.info('Cache flush requested - starting fresh rebuild')
+			return
+
 		if not os.path.exists(cachefile):
 			return
 		logger.info('Loading cache...')
@@ -416,6 +421,103 @@ class GitDataCollector(DataCollector):
 		# Return filter to only process new commits
 		return True, '%s..%s' % (last_commit, git_branch)
 
+	def _save_data_to_cache(self):
+		"""Save all collected data structures to cache for incremental updates"""
+		self.cache['data'] = {
+			'authors': self.authors,
+			'domains': self.domains,
+			'activity_by_hour_of_day': self.activity_by_hour_of_day,
+			'activity_by_day_of_week': self.activity_by_day_of_week,
+			'activity_by_month_of_year': self.activity_by_month_of_year,
+			'activity_by_hour_of_week': self.activity_by_hour_of_week,
+			'activity_by_hour_of_day_busiest': self.activity_by_hour_of_day_busiest,
+			'activity_by_hour_of_week_busiest': self.activity_by_hour_of_week_busiest,
+			'activity_by_year_week': self.activity_by_year_week,
+			'activity_by_year_week_peak': self.activity_by_year_week_peak,
+			'author_of_month': self.author_of_month,
+			'author_of_year': self.author_of_year,
+			'commits_by_month': self.commits_by_month,
+			'commits_by_year': self.commits_by_year,
+			'first_commit_stamp': self.first_commit_stamp,
+			'last_commit_stamp': self.last_commit_stamp,
+			'last_active_day': self.last_active_day,
+			'active_days': self.active_days,
+			'total_lines': self.total_lines,
+			'total_lines_added': self.total_lines_added,
+			'total_lines_removed': self.total_lines_removed,
+			'churn_by_date': self.churn_by_date,
+			'churn_by_month': self.churn_by_month,
+			'max_churn_day': self.max_churn_day,
+			'max_net_growth_day': self.max_net_growth_day,
+			'refactoring_periods': self.refactoring_periods,
+			'file_changes': self.file_changes,
+			'file_hotspots': self.file_hotspots,
+			'commit_sizes': self.commit_sizes,
+			'size_categories': self.size_categories,
+			'commits_by_size': self.commits_by_size,
+			'author_pairs': self.author_pairs,
+			'knowledge_silos': self.knowledge_silos,
+			'collaboration_files': self.collaboration_files,
+			'commits_by_timezone': self.commits_by_timezone,
+			'changes_by_date': self.changes_by_date,
+			'files_by_stamp': self.files_by_stamp,
+			'total_authors': self.total_authors,
+			'total_commits': getattr(self, 'total_commits', 0),
+			'total_files': getattr(self, 'total_files', 0),
+		}
+
+	def _restore_data_from_cache(self):
+		"""Restore all collected data structures from cache"""
+		if 'data' not in self.cache:
+			return False
+
+		cached_data = self.cache['data']
+		self.authors = cached_data.get('authors', {})
+		self.domains = cached_data.get('domains', {})
+		self.activity_by_hour_of_day = cached_data.get('activity_by_hour_of_day', {})
+		self.activity_by_day_of_week = cached_data.get('activity_by_day_of_week', {})
+		self.activity_by_month_of_year = cached_data.get('activity_by_month_of_year', {})
+		self.activity_by_hour_of_week = cached_data.get('activity_by_hour_of_week', {})
+		self.activity_by_hour_of_day_busiest = cached_data.get('activity_by_hour_of_day_busiest', 0)
+		self.activity_by_hour_of_week_busiest = cached_data.get('activity_by_hour_of_week_busiest', 0)
+		self.activity_by_year_week = cached_data.get('activity_by_year_week', {})
+		self.activity_by_year_week_peak = cached_data.get('activity_by_year_week_peak', 0)
+		self.author_of_month = cached_data.get('author_of_month', {})
+		self.author_of_year = cached_data.get('author_of_year', {})
+		self.commits_by_month = cached_data.get('commits_by_month', {})
+		self.commits_by_year = cached_data.get('commits_by_year', {})
+		self.first_commit_stamp = cached_data.get('first_commit_stamp', 0)
+		self.last_commit_stamp = cached_data.get('last_commit_stamp', 0)
+		self.last_active_day = cached_data.get('last_active_day')
+		self.active_days = cached_data.get('active_days', set())
+		self.total_lines = cached_data.get('total_lines', 0)
+		self.total_lines_added = cached_data.get('total_lines_added', 0)
+		self.total_lines_removed = cached_data.get('total_lines_removed', 0)
+		self.churn_by_date = cached_data.get('churn_by_date', {})
+		self.churn_by_month = cached_data.get('churn_by_month', {})
+		self.max_churn_day = cached_data.get('max_churn_day', (None, 0))
+		self.max_net_growth_day = cached_data.get('max_net_growth_day', (None, 0))
+		self.refactoring_periods = cached_data.get('refactoring_periods', [])
+		self.file_changes = cached_data.get('file_changes', {})
+		self.file_hotspots = cached_data.get('file_hotspots', [])
+		self.commit_sizes = cached_data.get('commit_sizes', [])
+		self.size_categories = cached_data.get('size_categories', {
+			'tiny': 0, 'small': 0, 'medium': 0, 'large': 0, 'huge': 0
+		})
+		self.commits_by_size = cached_data.get('commits_by_size', {})
+		self.author_pairs = cached_data.get('author_pairs', {})
+		self.knowledge_silos = cached_data.get('knowledge_silos', [])
+		self.collaboration_files = cached_data.get('collaboration_files', [])
+		self.commits_by_timezone = cached_data.get('commits_by_timezone', {})
+		self.changes_by_date = cached_data.get('changes_by_date', {})
+		self.files_by_stamp = cached_data.get('files_by_stamp', {})
+		self.total_authors = cached_data.get('total_authors', 0)
+		self.total_commits = cached_data.get('total_commits', 0)
+		self.total_files = cached_data.get('total_files', 0)
+
+		logger.info('Restored collected data from cache')
+		return True
+
 	def collect(self, dir, args=None):
 		DataCollector.collect(self, dir)
 
@@ -431,11 +533,30 @@ class GitDataCollector(DataCollector):
 		# Check for incremental update opportunity
 		# Note: User-specified filters override incremental mode
 		has_new_commits = True
+		commit_range_filter = ''
+		using_incremental = False
+
 		if not git_filter:
-			has_new_commits, _ = self._get_new_commits(git_branch)
+			has_new_commits, commit_range_filter = self._get_new_commits(git_branch)
 			if not has_new_commits:
-				logger.info('Repository unchanged since last run')
-				logger.info('Reprocessing with cached git operations for speed')
+				# No new commits - try to restore from cache
+				if self._restore_data_from_cache():
+					logger.info('Using cached data - no processing needed')
+					return
+				else:
+					# No cached data available, need to process all commits
+					logger.info('Repository unchanged but no cached data - processing all commits')
+
+		# If we have new commits and cached data, restore it first then merge new data
+		if has_new_commits and commit_range_filter:
+			if self._restore_data_from_cache():
+				logger.info('Incremental update mode: processing new commits only')
+				using_incremental = True
+				# Use the commit range filter to process only new commits
+				if git_filter:
+					git_filter = git_filter + ' ' + commit_range_filter
+				else:
+					git_filter = commit_range_filter
 
 		# Parse date filters for tag filtering
 		since_stamp = None
@@ -452,71 +573,76 @@ class GitDataCollector(DataCollector):
 				except Exception:
 					pass
 
-		try:
-			cmd = 'git log %s %s' % (git_filter, git_branch)
-			self.total_authors = int(getpipeoutput([cmd, 'git shortlog -s', 'wc -l']))
-		except Exception:
-			self.total_authors = 0
-		#self.total_lines = int(getoutput('git-ls-files -z |xargs -0 cat |wc -l'))
+		# Initialize data structures only if not using incremental mode
+		# (incremental mode already restored data from cache)
+		if not using_incremental:
+			logger.info('Full collection mode: processing all commits')
 
-		self.activity_by_hour_of_day = {} # hour -> commits
-		self.activity_by_day_of_week = {} # day -> commits
-		self.activity_by_month_of_year = {} # month [1-12] -> commits
-		self.activity_by_hour_of_week = {} # weekday -> hour -> commits
-		self.activity_by_hour_of_day_busiest = 0
-		self.activity_by_hour_of_week_busiest = 0
-		self.activity_by_year_week = {} # yy_wNN -> commits
-		self.activity_by_year_week_peak = 0
+			try:
+				cmd = 'git log %s %s' % (git_filter, git_branch)
+				self.total_authors = int(getpipeoutput([cmd, 'git shortlog -s', 'wc -l']))
+			except Exception:
+				self.total_authors = 0
+			#self.total_lines = int(getoutput('git-ls-files -z |xargs -0 cat |wc -l'))
 
-		self.authors = {} # name -> {commits, first_commit_stamp, last_commit_stamp, last_active_day, active_days, lines_added, lines_removed}
+			self.activity_by_hour_of_day = {} # hour -> commits
+			self.activity_by_day_of_week = {} # day -> commits
+			self.activity_by_month_of_year = {} # month [1-12] -> commits
+			self.activity_by_hour_of_week = {} # weekday -> hour -> commits
+			self.activity_by_hour_of_day_busiest = 0
+			self.activity_by_hour_of_week_busiest = 0
+			self.activity_by_year_week = {} # yy_wNN -> commits
+			self.activity_by_year_week_peak = 0
+
+			self.authors = {} # name -> {commits, first_commit_stamp, last_commit_stamp, last_active_day, active_days, lines_added, lines_removed}
 
 		# domains
-		self.domains = {} # domain -> commits
+			self.domains = {} # domain -> commits
 
 		# author of the month
-		self.author_of_month = {} # month -> author -> commits
-		self.author_of_year = {} # year -> author -> commits
-		self.commits_by_month = {} # month -> commits
-		self.commits_by_year = {} # year -> commits
-		self.first_commit_stamp = 0
-		self.last_commit_stamp = 0
-		self.last_active_day = None
-		self.active_days = set()
+			self.author_of_month = {} # month -> author -> commits
+			self.author_of_year = {} # year -> author -> commits
+			self.commits_by_month = {} # month -> commits
+			self.commits_by_year = {} # year -> commits
+			self.first_commit_stamp = 0
+			self.last_commit_stamp = 0
+			self.last_active_day = None
+			self.active_days = set()
 
 		# lines
-		self.total_lines = 0
-		self.total_lines_added = 0
-		self.total_lines_removed = 0
+			self.total_lines = 0
+			self.total_lines_added = 0
+			self.total_lines_removed = 0
 
 		# Code churn analysis
-		self.churn_by_date = {} # date -> { 'added': lines, 'removed': lines, 'net': lines, 'churn': lines }
-		self.churn_by_month = {} # YYYY-MM -> { 'added': lines, 'removed': lines, 'net': lines, 'churn': lines }
-		self.max_churn_day = (None, 0) # (date, churn_value)
-		self.max_net_growth_day = (None, 0) # (date, net_growth)
-		self.refactoring_periods = [] # list of (date, churn_ratio, net_change) where heavy refactoring occurred
+			self.churn_by_date = {} # date -> { 'added': lines, 'removed': lines, 'net': lines, 'churn': lines }
+			self.churn_by_month = {} # YYYY-MM -> { 'added': lines, 'removed': lines, 'net': lines, 'churn': lines }
+			self.max_churn_day = (None, 0) # (date, churn_value)
+			self.max_net_growth_day = (None, 0) # (date, net_growth)
+			self.refactoring_periods = [] # list of (date, churn_ratio, net_change) where heavy refactoring occurred
 
 		# File volatility metrics
-		self.file_changes = {} # filename -> { 'changes': count, 'authors': set(), 'last_change': stamp, 'lines_changed': total }
-		self.file_hotspots = [] # list of (filename, change_count) sorted by changes
+			self.file_changes = {} # filename -> { 'changes': count, 'authors': set(), 'last_change': stamp, 'lines_changed': total }
+			self.file_hotspots = [] # list of (filename, change_count) sorted by changes
 
 		# Commit size distribution
-		self.commit_sizes = [] # list of (commit_hash, size_category, lines_changed, files_changed)
-		self.size_categories = {
-			'tiny': 0,      # 1-10 lines
-			'small': 0,     # 11-50 lines
-			'medium': 0,    # 51-200 lines
-			'large': 0,     # 201-500 lines
-			'huge': 0       # 500+ lines
-		}
-		self.commits_by_size = {}  # size_category -> list of commit info
+			self.commit_sizes = [] # list of (commit_hash, size_category, lines_changed, files_changed)
+			self.size_categories = {
+				'tiny': 0,      # 1-10 lines
+				'small': 0,     # 11-50 lines
+				'medium': 0,    # 51-200 lines
+				'large': 0,     # 201-500 lines
+				'huge': 0       # 500+ lines
+			}
+			self.commits_by_size = {}  # size_category -> list of commit info
 
 		# Author collaboration metrics
-		self.author_pairs = {}  # (author1, author2) -> { 'files': set(), 'collaboration_count': int }
-		self.knowledge_silos = []  # list of (filename, sole_author, changes)
-		self.collaboration_files = []  # list of (filename, author_count, authors)
+			self.author_pairs = {}  # (author1, author2) -> { 'files': set(), 'collaboration_count': int }
+			self.knowledge_silos = []  # list of (filename, sole_author, changes)
+			self.collaboration_files = []  # list of (filename, author_count, authors)
 
 		# timezone
-		self.commits_by_timezone = {} # timezone -> commits
+			self.commits_by_timezone = {} # timezone -> commits
 
 		# tags
 		self.tags = {}
@@ -677,7 +803,8 @@ class GitDataCollector(DataCollector):
 
 		# Parallel file counting (optimized from previous bottleneck)
 		# outputs "<stamp> <files>" for each revision
-		self.files_by_stamp = {} # stamp -> files
+		if not using_incremental:
+			self.files_by_stamp = {} # stamp -> files
 		cmd = 'git rev-list --pretty=format:"%%at %%T" %s %s' % (git_filter, git_branch)
 		revlines = getpipeoutput([cmd, 'grep -v ^commit']).strip().split('\n')
 		lines = []
@@ -763,7 +890,8 @@ class GitDataCollector(DataCollector):
 		# outputs:
 		#  N files changed, N insertions (+), N deletions(-)
 		# <stamp> <author>
-		self.changes_by_date = {} # stamp -> { files, ins, del }
+		if not using_incremental:
+			self.changes_by_date = {} # stamp -> { files, ins, del }
 		cmd = 'git log %s %s --shortstat --pretty=format:"%%at %%aN"' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd]).split('\n')
 		lines.reverse()
@@ -1015,6 +1143,9 @@ class GitDataCollector(DataCollector):
 
 		# Sort knowledge silos by number of changes (most changed silos first)
 		self.knowledge_silos.sort(key=lambda x: x['changes'], reverse=True)
+
+		# Save all collected data to cache for incremental updates
+		self._save_data_to_cache()
 
 	def getActiveDays(self):
 		return self.active_days
@@ -2216,7 +2347,8 @@ class GitStats:
 		overall_progress.set_description('Phase 1/6: Loading cache')
 		overall_progress.update(0)
 		data = GitDataCollector()
-		data.loadCache(cachefile)
+		flush_cache = getattr(self.args, 'flush', False)
+		data.loadCache(cachefile, flush=flush_cache)
 		overall_progress.update(1)
 
 		overall_progress.set_description('Phase 2/6: Collecting data')
@@ -2324,6 +2456,8 @@ Configuration keys (use with -c):
 	output_group = parser.add_argument_group('output options')
 	output_group.add_argument('--no-cache', action='store_true',
 							  help='do not use or save cache')
+	output_group.add_argument('--flush', action='store_true',
+							  help='flush cache and force full rebuild (ignore incremental updates)')
 
 	return parser.parse_args()
 
