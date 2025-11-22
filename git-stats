@@ -962,7 +962,7 @@ class GitDataCollector(DataCollector):
 
 		# Helper function for parallel extension analysis
 		def analyze_file_extension(line):
-			parts = re.split('\s+', line, 4)
+			parts = re.split(r'\s+', line, 4)
 			sha1 = parts[2]
 			filename = parts[3]
 
@@ -1083,7 +1083,7 @@ class GitDataCollector(DataCollector):
 				else:
 					logger.debug('Unexpected line "%s"' % line)
 			else:
-				numbers = re.findall('\d+', line)
+				numbers = re.findall(r'\d+', line)
 				if len(numbers) == 3:
 					(files, inserted, deleted) = list(map(lambda el : int(el), numbers))
 					total_lines += inserted
@@ -2732,7 +2732,7 @@ class GitStats:
 		time_end = time.time()
 		exectime_internal = time_end - time_start
 		ext_pct = (100.0 * exectime_external) / exectime_internal if exectime_internal > 0 else 0
-	logger.info('Execution time %.5f secs, %.5f secs (%.2f %%) in external commands)' % (exectime_internal, exectime_external, ext_pct))
+		logger.info('Execution time %.5f secs, %.5f secs (%.2f %%) in external commands)' % (exectime_internal, exectime_external, ext_pct))
 
 
 def parse_arguments():
