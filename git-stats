@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # Copyright (c) 2007-2010 Heikki Hokkanen <hoxu@users.sf.net> & others (see doc/author.txt)
 # GPLv2 / GPLv3
+import argparse
 import datetime
-import getopt
 import glob
+import logging
 import os
 import pickle
 import platform
@@ -14,8 +15,42 @@ import sys
 import time
 import zlib
 
-IMAGE_TYPE = 'svg'  # everything that gnuplot accepts, I guess 
-GNUPLOT_IMAGE_SPECIFICATIONS = {'svg':'','png':'transparent'} 
+try:
+	from tqdm import tqdm
+	TQDM_AVAILABLE = True
+except ImportError:
+	TQDM_AVAILABLE = False
+	# Fallback progress indicator
+	class tqdm:
+		def __init__(self, iterable=None, total=None, desc=None, disable=False, **kwargs):
+			self.iterable = iterable
+			self.total = total
+			self.desc = desc
+			self.disable = disable
+			self.n = 0
+
+		def __iter__(self):
+			return iter(self.iterable)
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, *args):
+			pass
+
+		def update(self, n=1):
+			self.n += n
+
+		def set_description(self, desc):
+			self.desc = desc
+
+		def close(self):
+			pass
+
+__version__ = '1.0.0-python3'
+
+IMAGE_TYPE = 'svg'  # everything that gnuplot accepts, I guess
+GNUPLOT_IMAGE_SPECIFICATIONS = {'svg':'','png':'transparent'}
 
 GNUPLOT_COMMON = 'set terminal {0} {1}\nset size 1.0,0.5\n'.format(IMAGE_TYPE, GNUPLOT_IMAGE_SPECIFICATIONS[IMAGE_TYPE] )
 ON_LINUX = (platform.system() == 'Linux')
@@ -23,6 +58,10 @@ ON_LINUX = (platform.system() == 'Linux')
 exectime_internal = 0.0
 exectime_external = 0.0
 time_start = time.time()
+
+# Setup logging
+logger = logging.getLogger('gitstats')
+logger.setLevel(logging.INFO)
 
 # By default, gnuplot is searched from path, but can be overridden with the
 # environment variable "GNUPLOT"
@@ -88,7 +127,7 @@ class DataCollector:
 	def loadCache(self, cachefile):
 		if not os.path.exists(cachefile):
 			return
-		print('Loading cache...')
+		logger.info('Loading cache...')
 		with open(cachefile, 'rb') as f:
 			try:
 				self.cache = pickle.loads(zlib.decompress(f.read()))
@@ -149,18 +188,43 @@ class DataCollector:
 	##
 	# Save cacheable data
 	def saveCache(self, cachefile):
-		print('Saving cache...')
+		logger.info('Saving cache...')
 		with open(cachefile, 'wb') as f:
 			#pickle.dump(self.cache, f)
 			data = zlib.compress(pickle.dumps(self.cache))
 			f.write(data)
 
 class GitDataCollector(DataCollector):
-	def collect(self, dir):
+	def _build_git_log_filter(self, args):
+		"""Build git log filter arguments from command line args"""
+		filters = []
+		if hasattr(args, 'since') and args.since:
+			filters.append('--since="%s"' % args.since)
+		if hasattr(args, 'until') and args.until:
+			filters.append('--until="%s"' % args.until)
+		if hasattr(args, 'author') and args.author:
+			filters.append('--author="%s"' % args.author)
+		if hasattr(args, 'branch') and args.branch:
+			branch = args.branch
+		else:
+			branch = 'HEAD'
+		return ' '.join(filters), branch
+
+	def collect(self, dir, args=None):
 		DataCollector.collect(self, dir)
 
+		# Build git filter arguments
+		git_filter = ''
+		git_branch = 'HEAD'
+		if args:
+			git_filter, git_branch = self._build_git_log_filter(args)
+
+		logger.debug('Git filter: %s' % git_filter if git_filter else 'Git filter: (none)')
+		logger.debug('Git branch: %s' % git_branch)
+
 		try:
-			self.total_authors = int(getpipeoutput(['git log', 'git shortlog -s', 'wc -l']))
+			cmd = 'git log %s %s' % (git_filter, git_branch)
+			self.total_authors = int(getpipeoutput([cmd, 'git shortlog -s', 'wc -l']))
 		except Exception:
 			self.total_authors = 0
 		#self.total_lines = int(getoutput('git-ls-files -z |xargs -0 cat |wc -l'))
@@ -200,7 +264,8 @@ class GitDataCollector(DataCollector):
 		# tags
 		self.tags = {}
 		lines = getpipeoutput(['git show-ref --tags']).split('\n')
-		for line in lines:
+		logger.debug('Processing %d tags' % len([l for l in lines if l]))
+		for line in tqdm(lines, desc='Processing tags', disable=logger.level > logging.INFO):
 			if len(line) == 0:
 				continue
 			(hash, tag) = line.split(' ')
@@ -236,8 +301,10 @@ class GitDataCollector(DataCollector):
 
 		# Collect revision statistics
 		# Outputs "<stamp> <date> <time> <timezone> <author> '<' <mail> '>'"
-		lines = getpipeoutput(['git rev-list --pretty=format:"%at %ai %an <%aE>" HEAD', 'grep -v ^commit']).split('\n')
-		for line in lines:
+		cmd = 'git rev-list --pretty=format:"%%at %%ai %%an <%%aE>" %s %s' % (git_filter, git_branch)
+		lines = getpipeoutput([cmd, 'grep -v ^commit']).split('\n')
+		logger.info('Processing %d commits...' % len([l for l in lines if l]))
+		for line in tqdm(lines, desc='Analyzing commits', disable=logger.level > logging.INFO):
 			parts = line.split(' ', 4)
 			author = ''
 			try:
@@ -340,9 +407,11 @@ class GitDataCollector(DataCollector):
 		# TODO Optimize this, it's the worst bottleneck
 		# outputs "<stamp> <files>" for each revision
 		self.files_by_stamp = {} # stamp -> files
-		revlines = getpipeoutput(['git rev-list --pretty=format:"%at %T" HEAD', 'grep -v ^commit']).strip().split('\n')
+		cmd = 'git rev-list --pretty=format:"%%at %%T" %s %s' % (git_filter, git_branch)
+		revlines = getpipeoutput([cmd, 'grep -v ^commit']).strip().split('\n')
 		lines = []
-		for revline in revlines:
+		logger.info('Counting files in %d revisions...' % len(revlines))
+		for revline in tqdm(revlines, desc='Counting files', disable=logger.level > logging.INFO):
 			time, rev = revline.split(' ')
 			linecount = self.getFilesInCommit(rev)
 			lines.append('%d %d' % (int(time), linecount))
@@ -356,13 +425,14 @@ class GitDataCollector(DataCollector):
 			try:
 				self.files_by_stamp[int(stamp)] = int(files)
 			except ValueError:
-				print('Warning: failed to parse line "%s"' % line)
+				logger.warning('Failed to parse line "%s"' % line)
 
 		# extensions
 		self.extensions = {} # extension -> files, lines
-		lines = getpipeoutput(['git ls-tree -r -z HEAD']).split('\000')
+		lines = getpipeoutput(['git ls-tree -r -z %s' % git_branch]).split('\000')
 		self.total_files = len(lines)
-		for line in lines:
+		logger.info('Analyzing %d files...' % self.total_files)
+		for line in tqdm(lines, desc='Analyzing files', disable=logger.level > logging.INFO):
 			if len(line) == 0:
 				continue
 			parts = re.split('\s+', line, 4)
@@ -383,15 +453,17 @@ class GitDataCollector(DataCollector):
 			try:
 				self.extensions[ext]['lines'] += self.getLinesInBlob(sha1)
 			except Exception:
-				print('Warning: Could not count lines for file "%s"' % line)
+				logger.warning('Could not count lines for file "%s"' % line)
 
 		# line statistics
 		# outputs:
 		#  N files changed, N insertions (+), N deletions(-)
 		# <stamp> <author>
 		self.changes_by_date = {} # stamp -> { files, ins, del }
-		lines = getpipeoutput(['git log --shortstat --pretty=format:"%at %an"']).split('\n')
+		cmd = 'git log %s %s --shortstat --pretty=format:"%%at %%an"' % (git_filter, git_branch)
+		lines = getpipeoutput([cmd]).split('\n')
 		lines.reverse()
+		logger.info('Calculating line statistics...')
 		files = 0; inserted = 0; deleted = 0; total_lines = 0
 		author = None
 		for line in lines:
@@ -410,9 +482,9 @@ class GitDataCollector(DataCollector):
 						self.authors[author]['lines_added'] = self.authors[author].get('lines_added', 0) + inserted
 						self.authors[author]['lines_removed'] = self.authors[author].get('lines_removed', 0) + deleted
 					except ValueError:
-						print('Warning: unexpected line "%s"' % line)
+						logger.debug('Unexpected line "%s"' % line)
 				else:
-					print('Warning: unexpected line "%s"' % line)
+					logger.debug('Unexpected line "%s"' % line)
 			else:
 				numbers = re.findall('\d+', line)
 				if len(numbers) == 3:
@@ -422,7 +494,7 @@ class GitDataCollector(DataCollector):
 					self.total_lines_added += inserted
 					self.total_lines_removed += deleted
 				else:
-					print('Warning: failed to handle line "%s"' % line)
+					logger.debug('Failed to handle line "%s"' % line)
 					(files, inserted, deleted) = (0, 0, 0)
 				#self.changes_by_date[stamp] = { 'files': files, 'ins': inserted, 'del': deleted }
 		self.total_lines = total_lines
@@ -553,7 +625,7 @@ class HTMLReportCreator(ReportCreator):
 					shutil.copyfile(src, path + '/' + file)
 					break
 			else:
-				print('Warning: "%s" not found, so not copied (searched: %s)' % (file, basedirs))
+				logger.warning('"%s" not found, so not copied (searched: %s)' % (file, basedirs))
 
 		f = open(path + "/index.html", 'w')
 		format = '%Y-%m-%d %H:%M:%S'
@@ -927,7 +999,7 @@ class HTMLReportCreator(ReportCreator):
 		self.createGraphs(path)
 	
 	def createGraphs(self, path):
-		print('Generating graphs...')
+		logger.info('Generating graphs...')
 
 		# hour of day
 		f = open(path + '/hour_of_day.plot', 'w')
@@ -1063,7 +1135,7 @@ plot 'lines_of_code.dat' using 1:2 w lines
 		for f in files:
 			out = getpipeoutput([gnuplot_cmd + ' "%s"' % f])
 			if len(out) > 0:
-				print(out)
+				logger.info(out)
 
 	def printHeader(self, f, title = ''):
 		f.write(
@@ -1095,11 +1167,27 @@ plot 'lines_of_code.dat' using 1:2 w lines
 		
 
 class GitStats:
-	def run(self, args_orig):
-		optlist, args = getopt.getopt(args_orig, 'c:')
-		for o,v in optlist:
-			if o == '-c':
-				key, value = v.split('=', 1)
+	def __init__(self, args=None):
+		self.args = args
+
+	def run(self):
+		# Setup logging handler
+		handler = logging.StreamHandler()
+		if self.args.verbose:
+			logger.setLevel(logging.DEBUG)
+			handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+		elif self.args.quiet:
+			logger.setLevel(logging.WARNING)
+			handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+		else:
+			logger.setLevel(logging.INFO)
+			handler.setFormatter(logging.Formatter('%(message)s'))
+		logger.addHandler(handler)
+
+		# Apply configuration overrides
+		if self.args.config:
+			for config_item in self.args.config:
+				key, value = config_item.split('=', 1)
 				if key not in conf:
 					raise KeyError('Error: no such key "%s" in config' % key)
 				if isinstance(conf[key], int):
@@ -1107,20 +1195,8 @@ class GitStats:
 				else:
 					conf[key] = value
 
-		if len(args) < 2:
-			print("""
-Usage: gitstats [options] <gitpath> <outputpath>
-
-Options:
--c key=value     Override configuration value
-
-Default config values:
-%s
-""" % conf)
-			sys.exit(0)
-
-		gitpath = args[0]
-		outputpath = os.path.abspath(args[1])
+		gitpath = self.args.gitpath
+		outputpath = os.path.abspath(self.args.outputpath)
 		rundir = os.getcwd()
 
 		try:
@@ -1128,34 +1204,98 @@ Default config values:
 		except OSError:
 			pass
 		if not os.path.isdir(outputpath):
-			print('FATAL: Output path is not a directory or does not exist')
+			logger.error('FATAL: Output path is not a directory or does not exist')
 			sys.exit(1)
 
-		print('Git path: %s' % gitpath)
-		print('Output path: %s' % outputpath)
+		logger.info('Git path: %s' % gitpath)
+		logger.info('Output path: %s' % outputpath)
+		logger.debug('Configuration: %s' % conf)
 
 		os.chdir(gitpath)
 
 		cachefile = os.path.join(outputpath, 'gitstats.cache')
 
-		print('Collecting data...')
+		logger.info('Collecting data...')
 		data = GitDataCollector()
 		data.loadCache(cachefile)
-		data.collect(gitpath)
-		print('Refining data...')
+		data.collect(gitpath, args=self.args)
+		logger.info('Refining data...')
 		data.saveCache(cachefile)
 		data.refine()
 
 		os.chdir(rundir)
 
-		print('Generating report...')
+		logger.info('Generating report...')
 		report = HTMLReportCreator()
 		report.create(data, outputpath)
 
 		time_end = time.time()
 		exectime_internal = time_end - time_start
-		print('Execution time %.5f secs, %.5f secs (%.2f %%) in external commands)' % (exectime_internal, exectime_external, (100.0 * exectime_external) / exectime_internal))
+		logger.info('Execution time %.5f secs, %.5f secs (%.2f %%) in external commands)' % (exectime_internal, exectime_external, (100.0 * exectime_external) / exectime_internal))
 
-g = GitStats()
-g.run(sys.argv[1:])
+
+def parse_arguments():
+	parser = argparse.ArgumentParser(
+		description='GitStats - Git repository statistics generator',
+		formatter_class=argparse.RawDescriptionHelpFormatter,
+		epilog='''
+Examples:
+  %(prog)s /path/to/repo /path/to/output
+  %(prog)s --verbose --since 2024-01-01 /path/to/repo /path/to/output
+  %(prog)s --author "John Doe" --branch main /path/to/repo /path/to/output
+  %(prog)s -c max_authors=50 /path/to/repo /path/to/output
+
+Configuration keys (use with -c):
+  max_authors    - Maximum number of authors to display (default: 20)
+  max_domains    - Maximum number of domains to display (default: 10)
+  max_ext_length - Maximum extension length (default: 10)
+  style          - CSS stylesheet filename (default: gitstats.css)
+		'''
+	)
+
+	parser.add_argument('gitpath', metavar='GITPATH',
+						help='path to git repository')
+	parser.add_argument('outputpath', metavar='OUTPUTPATH',
+						help='path to output directory')
+
+	parser.add_argument('--version', action='version', version='%(prog)s ' + __version__)
+
+	# Logging options
+	log_group = parser.add_mutually_exclusive_group()
+	log_group.add_argument('-v', '--verbose', action='store_true',
+						   help='enable verbose output (DEBUG level)')
+	log_group.add_argument('-q', '--quiet', action='store_true',
+						   help='show only warnings and errors')
+
+	# Configuration options
+	parser.add_argument('-c', '--config', action='append', metavar='KEY=VALUE',
+						help='override configuration value (can be used multiple times)')
+
+	# Filtering options
+	filter_group = parser.add_argument_group('filtering options')
+	filter_group.add_argument('--since', metavar='DATE',
+							  help='analyze commits since date (YYYY-MM-DD or "YYYY-MM-DD HH:MM:SS")')
+	filter_group.add_argument('--until', metavar='DATE',
+							  help='analyze commits until date (YYYY-MM-DD or "YYYY-MM-DD HH:MM:SS")')
+	filter_group.add_argument('--author', metavar='PATTERN',
+							  help='filter commits by author name (regex pattern)')
+	filter_group.add_argument('--branch', metavar='BRANCH', default='HEAD',
+							  help='analyze specific branch (default: HEAD)')
+
+	# Output options
+	output_group = parser.add_argument_group('output options')
+	output_group.add_argument('--no-cache', action='store_true',
+							  help='do not use or save cache')
+
+	return parser.parse_args()
+
+
+def main():
+	args = parse_arguments()
+	g = GitStats(args)
+	g.run()
+
+
+if __name__ == '__main__':
+	main()
 
