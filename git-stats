@@ -244,6 +244,9 @@ class DataCollector:
 	##
 	# Load cacheable data
 	def loadCache(self, cachefile, flush=False):
+		# Store cachefile path for progressive saves
+		self.cachefile = cachefile
+
 		# If flush is requested, skip loading and start fresh
 		if flush:
 			logger.info('Cache flush requested - starting fresh rebuild')
@@ -423,48 +426,71 @@ class GitDataCollector(DataCollector):
 
 	def _save_data_to_cache(self):
 		"""Save all collected data structures to cache for incremental updates"""
+		# Use getattr with defaults to handle attributes that may not be initialized yet
+		# This allows progressive cache saves during early stages of collection
 		self.cache['data'] = {
-			'authors': self.authors,
-			'domains': self.domains,
-			'activity_by_hour_of_day': self.activity_by_hour_of_day,
-			'activity_by_day_of_week': self.activity_by_day_of_week,
-			'activity_by_month_of_year': self.activity_by_month_of_year,
-			'activity_by_hour_of_week': self.activity_by_hour_of_week,
-			'activity_by_hour_of_day_busiest': self.activity_by_hour_of_day_busiest,
-			'activity_by_hour_of_week_busiest': self.activity_by_hour_of_week_busiest,
-			'activity_by_year_week': self.activity_by_year_week,
-			'activity_by_year_week_peak': self.activity_by_year_week_peak,
-			'author_of_month': self.author_of_month,
-			'author_of_year': self.author_of_year,
-			'commits_by_month': self.commits_by_month,
-			'commits_by_year': self.commits_by_year,
-			'first_commit_stamp': self.first_commit_stamp,
-			'last_commit_stamp': self.last_commit_stamp,
-			'last_active_day': self.last_active_day,
-			'active_days': self.active_days,
-			'total_lines': self.total_lines,
-			'total_lines_added': self.total_lines_added,
-			'total_lines_removed': self.total_lines_removed,
-			'churn_by_date': self.churn_by_date,
-			'churn_by_month': self.churn_by_month,
-			'max_churn_day': self.max_churn_day,
-			'max_net_growth_day': self.max_net_growth_day,
-			'refactoring_periods': self.refactoring_periods,
-			'file_changes': self.file_changes,
-			'file_hotspots': self.file_hotspots,
-			'commit_sizes': self.commit_sizes,
-			'size_categories': self.size_categories,
-			'commits_by_size': self.commits_by_size,
-			'author_pairs': self.author_pairs,
-			'knowledge_silos': self.knowledge_silos,
-			'collaboration_files': self.collaboration_files,
-			'commits_by_timezone': self.commits_by_timezone,
-			'changes_by_date': self.changes_by_date,
-			'files_by_stamp': self.files_by_stamp,
-			'total_authors': self.total_authors,
+			'authors': getattr(self, 'authors', {}),
+			'domains': getattr(self, 'domains', {}),
+			'activity_by_hour_of_day': getattr(self, 'activity_by_hour_of_day', {}),
+			'activity_by_day_of_week': getattr(self, 'activity_by_day_of_week', {}),
+			'activity_by_month_of_year': getattr(self, 'activity_by_month_of_year', {}),
+			'activity_by_hour_of_week': getattr(self, 'activity_by_hour_of_week', {}),
+			'activity_by_hour_of_day_busiest': getattr(self, 'activity_by_hour_of_day_busiest', 0),
+			'activity_by_hour_of_week_busiest': getattr(self, 'activity_by_hour_of_week_busiest', 0),
+			'activity_by_year_week': getattr(self, 'activity_by_year_week', {}),
+			'activity_by_year_week_peak': getattr(self, 'activity_by_year_week_peak', 0),
+			'author_of_month': getattr(self, 'author_of_month', {}),
+			'author_of_year': getattr(self, 'author_of_year', {}),
+			'commits_by_month': getattr(self, 'commits_by_month', {}),
+			'commits_by_year': getattr(self, 'commits_by_year', {}),
+			'first_commit_stamp': getattr(self, 'first_commit_stamp', 0),
+			'last_commit_stamp': getattr(self, 'last_commit_stamp', 0),
+			'last_active_day': getattr(self, 'last_active_day', None),
+			'active_days': getattr(self, 'active_days', set()),
+			'total_lines': getattr(self, 'total_lines', 0),
+			'total_lines_added': getattr(self, 'total_lines_added', 0),
+			'total_lines_removed': getattr(self, 'total_lines_removed', 0),
+			'churn_by_date': getattr(self, 'churn_by_date', {}),
+			'churn_by_month': getattr(self, 'churn_by_month', {}),
+			'max_churn_day': getattr(self, 'max_churn_day', (0, 0)),
+			'max_net_growth_day': getattr(self, 'max_net_growth_day', (0, 0)),
+			'refactoring_periods': getattr(self, 'refactoring_periods', []),
+			'file_changes': getattr(self, 'file_changes', {}),
+			'file_hotspots': getattr(self, 'file_hotspots', {}),
+			'commit_sizes': getattr(self, 'commit_sizes', []),
+			'size_categories': getattr(self, 'size_categories', {}),
+			'commits_by_size': getattr(self, 'commits_by_size', {}),
+			'author_pairs': getattr(self, 'author_pairs', {}),
+			'knowledge_silos': getattr(self, 'knowledge_silos', {}),
+			'collaboration_files': getattr(self, 'collaboration_files', {}),
+			'commits_by_timezone': getattr(self, 'commits_by_timezone', {}),
+			'changes_by_date': getattr(self, 'changes_by_date', {}),
+			'files_by_stamp': getattr(self, 'files_by_stamp', {}),
+			'total_authors': getattr(self, 'total_authors', 0),
 			'total_commits': getattr(self, 'total_commits', 0),
 			'total_files': getattr(self, 'total_files', 0),
 		}
+
+	def _save_progressive_cache(self, last_commit_hash=None):
+		"""
+		Save cache progressively during processing to allow resumption after interruption.
+		This saves current data state and optionally the last processed commit hash.
+		"""
+		# Save current data state
+		self._save_data_to_cache()
+
+		# Track last processed commit for potential resume
+		if last_commit_hash:
+			self.cache['last_processed_commit'] = last_commit_hash
+			self.cache['last_save_time'] = time.time()
+
+		# Write cache to disk
+		if hasattr(self, 'cachefile') and self.cachefile:
+			try:
+				self.saveCache(self.cachefile)
+				logger.debug('Progressive cache saved (last commit: %s)' % (last_commit_hash[:8] if last_commit_hash else 'N/A'))
+			except Exception as e:
+				logger.warning('Failed to save progressive cache: %s' % str(e))
 
 	def _restore_data_from_cache(self):
 		"""Restore all collected data structures from cache"""
@@ -700,22 +726,28 @@ class GitDataCollector(DataCollector):
 				self.tags[tag]['authors'][author] = commits
 
 		# Collect revision statistics
-		# Outputs "<stamp> <date> <time> <timezone> <author> '<' <mail> '>'"
+		# Outputs "<hash> <stamp> <date> <time> <timezone> <author> '<' <mail> '>'"
 		# Note: Using %aN and %aE (capital letters) to respect .mailmap
-		cmd = 'git log --pretty=format:"%%at %%ai %%aN <%%aE>" %s %s' % (git_filter, git_branch)
+		cmd = 'git log --pretty=format:"%%H %%at %%ai %%aN <%%aE>" %s %s' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd, 'grep -v ^commit']).split('\n')
 		commit_lines = [l for l in lines if l]
 		logger.info('Processing %d commits...' % len(commit_lines))
+
+		# Track progress for periodic cache saves
+		commits_processed = 0
+		SAVE_INTERVAL = 1000  # Save cache every N commits
+
 		for line in tqdm(commit_lines, desc='Analyzing commits', unit='commits', disable=logger.level > logging.INFO):
 			try:
-				parts = line.split(' ', 4)
+				parts = line.split(' ', 5)
+				commit_hash = parts[0]
 				author = ''
 				try:
-					stamp = int(parts[0])
+					stamp = int(parts[1])
 				except ValueError:
 					stamp = 0
-				timezone = parts[3]
-				author, mail = parts[4].split('<', 1)
+				timezone = parts[4]
+				author, mail = parts[5].split('<', 1)
 			except Exception as e:
 				logger.debug('Error processing commit line: %s - %s' % (line, str(e)))
 				continue
@@ -809,6 +841,16 @@ class GitDataCollector(DataCollector):
 
 			# timezone
 			self.commits_by_timezone[timezone] = self.commits_by_timezone.get(timezone, 0) + 1
+
+			# Progressive cache save (every N commits)
+			commits_processed += 1
+			if commits_processed % SAVE_INTERVAL == 0:
+				self._save_progressive_cache(commit_hash)
+
+		# Final progressive save after commit processing
+		if commits_processed > 0:
+			logger.info('Saving progress after processing %d commits...' % commits_processed)
+			self._save_progressive_cache(commit_hash if 'commit_hash' in locals() else None)
 
 		# Parallel file counting (optimized from previous bottleneck)
 		# outputs "<stamp> <files>" for each revision
