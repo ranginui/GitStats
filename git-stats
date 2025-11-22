@@ -704,15 +704,26 @@ class GitDataCollector(DataCollector):
 		# Track the previous tag for each major version series separately
 		# This handles interleaved releases (e.g., v24.05.07 released after v24.11.01)
 		prev_by_version = {}  # major_version -> last_tag_in_that_version
+		prev_first_release = None  # Last .00 release (for comparing major releases)
 
 		if len(tags_sorted_by_date_desc) > 0:
 			logger.debug('Collecting statistics for %d filtered tags' % len(tags_sorted_by_date_desc))
 
 		for tag in reversed(tags_sorted_by_date_desc):
 			current_major_version = self.getTagMajorVersion(tag)
+			is_first_release = self.isFirstReleaseInSeries(tag)
 
-			# Get the previous tag from the same major version series
-			prev = prev_by_version.get(current_major_version) if current_major_version else None
+			# Determine which previous tag to compare against
+			if is_first_release:
+				# .00 releases (major releases) compare to previous .00 release
+				prev = prev_first_release
+				if prev:
+					logger.debug('Comparing major release %s to previous major release %s' % (tag, prev))
+				else:
+					logger.debug('First major release in repository: %s' % tag)
+			else:
+				# Maintenance releases compare within their major version series
+				prev = prev_by_version.get(current_major_version) if current_major_version else None
 
 			if current_major_version and current_major_version not in prev_by_version:
 				logger.debug('Starting new version series: %s' % current_major_version)
@@ -724,9 +735,11 @@ class GitDataCollector(DataCollector):
 			if len(output) == 0:
 				continue
 
-			# Update the previous tag for this major version
+			# Update tracking variables
 			if current_major_version:
 				prev_by_version[current_major_version] = tag
+			if is_first_release:
+				prev_first_release = tag
 
 			for line in output.split('\n'):
 				parts = re.split(r'\s+', line, 2)
@@ -1284,6 +1297,17 @@ class GitDataCollector(DataCollector):
 			return match.group(1)
 
 		return None
+
+	def isFirstReleaseInSeries(self, tag):
+		"""
+		Check if this is the first release in a major version series (e.g., v24.11.00, v25.05.00).
+		These should be compared to the previous .00 release, not within their series.
+		"""
+		tag_clean = tag.lstrip('vV')
+		# Match tags like 24.11.00, 25.05.00 (with optional suffix like -1)
+		# The pattern is: XX.XX.00 where XX are digits
+		match = re.match(r'^\d+\.\d+\.0+(?:-\d+)?$', tag_clean)
+		return match is not None
 
 	def getTagDate(self, tag):
 		return self.revToDate('tags/' + tag)
