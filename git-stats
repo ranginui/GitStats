@@ -2617,6 +2617,10 @@ class GitStats:
 			for stamp, changes in getattr(repo_data, 'changes_by_date', {}).items():
 				if stamp not in aggregated.changes_by_date:
 					aggregated.changes_by_date[stamp] = {'lines': 0, 'commits': 0, 'files': 0}
+				# Ensure all keys exist before incrementing
+				for key in ['lines', 'commits', 'files']:
+					if key not in aggregated.changes_by_date[stamp]:
+						aggregated.changes_by_date[stamp][key] = 0
 				aggregated.changes_by_date[stamp]['lines'] += changes.get('lines', 0)
 				aggregated.changes_by_date[stamp]['commits'] += changes.get('commits', 0)
 				aggregated.changes_by_date[stamp]['files'] += changes.get('files', 0)
