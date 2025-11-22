@@ -55,6 +55,14 @@ The `conf` dictionary contains customizable settings:
 - Supports SVG (default) and PNG formats
 - Image type controlled by `IMAGE_TYPE` variable
 
+### HTML Output Features
+- **Responsive Design**: Mobile-friendly layout with flexible tables and navigation
+- **Dark Mode**: Toggle between light and dark themes with localStorage persistence
+- **Modern CSS**: Uses CSS variables for easy theming and customization
+- **Accessibility**: Supports reduced motion preferences and high contrast mode
+- **Interactive Tables**: Sortable columns using sortable.js
+- **Progressive Enhancement**: Works with and without JavaScript enabled
+
 ## Working with the Code
 
 ### Running GitStats

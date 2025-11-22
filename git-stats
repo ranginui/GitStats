@@ -1244,9 +1244,46 @@ plot 'lines_of_code.dat' using 1:2 w lines
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 	<title>GitStats - %s</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<link rel="stylesheet" href="%s" type="text/css" />
 	<meta name="generator" content="GitStats %s" />
 	<script type="text/javascript" src="sortable.js"></script>
+	<script type="text/javascript">
+		// Dark mode toggle functionality
+		(function() {
+			// Check for saved theme preference or default to light mode
+			const currentTheme = localStorage.getItem('theme') || 'light';
+
+			// Apply theme immediately to prevent flash
+			if (currentTheme === 'dark') {
+				document.documentElement.setAttribute('data-theme', 'dark');
+			}
+
+			// Wait for DOM to be ready
+			document.addEventListener('DOMContentLoaded', function() {
+				// Create theme toggle button
+				const toggleButton = document.createElement('button');
+				toggleButton.className = 'theme-toggle';
+				toggleButton.setAttribute('aria-label', 'Toggle dark mode');
+				toggleButton.innerHTML = currentTheme === 'dark' ? '☀️' : '🌙';
+				document.body.appendChild(toggleButton);
+
+				// Toggle theme on button click
+				toggleButton.addEventListener('click', function() {
+					const theme = document.documentElement.getAttribute('data-theme');
+					if (theme === 'dark') {
+						document.documentElement.removeAttribute('data-theme');
+						localStorage.setItem('theme', 'light');
+						toggleButton.innerHTML = '🌙';
+					} else {
+						document.documentElement.setAttribute('data-theme', 'dark');
+						localStorage.setItem('theme', 'dark');
+						toggleButton.innerHTML = '☀️';
+					}
+				});
+			});
+		})();
+	</script>
 </head>
 <body>
 """ % (self.title, conf['style'], getversion()))
