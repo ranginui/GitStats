@@ -2607,6 +2607,41 @@ class GitStats:
 						aggregated.tags[tag]['hash'] = tag_data.get('hash', '')
 						aggregated.tags[tag]['date'] = tag_data.get('date', '')
 
+			# Merge commits by month/year
+			for month, count in getattr(repo_data, 'commits_by_month', {}).items():
+				aggregated.commits_by_month[month] = aggregated.commits_by_month.get(month, 0) + count
+			for year, count in getattr(repo_data, 'commits_by_year', {}).items():
+				aggregated.commits_by_year[year] = aggregated.commits_by_year.get(year, 0) + count
+
+			# Merge changes by date and files by stamp
+			for stamp, changes in getattr(repo_data, 'changes_by_date', {}).items():
+				if stamp not in aggregated.changes_by_date:
+					aggregated.changes_by_date[stamp] = {'lines': 0, 'commits': 0, 'files': 0}
+				aggregated.changes_by_date[stamp]['lines'] += changes.get('lines', 0)
+				aggregated.changes_by_date[stamp]['commits'] += changes.get('commits', 0)
+				aggregated.changes_by_date[stamp]['files'] += changes.get('files', 0)
+
+			for stamp, count in getattr(repo_data, 'files_by_stamp', {}).items():
+				aggregated.files_by_stamp[stamp] = aggregated.files_by_stamp.get(stamp, 0) + count
+
+			# Merge activity by month/year-week
+			for month, count in getattr(repo_data, 'activity_by_month_of_year', {}).items():
+				aggregated.activity_by_month_of_year[month] = aggregated.activity_by_month_of_year.get(month, 0) + count
+			for week, count in getattr(repo_data, 'activity_by_year_week', {}).items():
+				aggregated.activity_by_year_week[week] = aggregated.activity_by_year_week.get(week, 0) + count
+
+			# Merge domains
+			for domain, count in getattr(repo_data, 'domains', {}).items():
+				aggregated.domains[domain] = aggregated.domains.get(domain, 0) + count
+
+			# Merge timezone data
+			for tz, count in getattr(repo_data, 'commits_by_timezone', {}).items():
+				aggregated.commits_by_timezone[tz] = aggregated.commits_by_timezone.get(tz, 0) + count
+
+			# Merge totals
+			aggregated.total_commits = getattr(aggregated, 'total_commits', 0) + getattr(repo_data, 'total_commits', 0)
+			aggregated.total_files = getattr(aggregated, 'total_files', 0) + getattr(repo_data, 'total_files', 0)
+
 			# Update first/last commit stamps
 			if repo_data.first_commit_stamp > 0:
 				if aggregated.first_commit_stamp == 0 or repo_data.first_commit_stamp < aggregated.first_commit_stamp:
