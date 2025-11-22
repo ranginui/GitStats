@@ -351,6 +351,13 @@ class GitDataCollector(DataCollector):
 		self.total_lines_added = 0
 		self.total_lines_removed = 0
 
+		# Code churn analysis
+		self.churn_by_date = {} # date -> { 'added': lines, 'removed': lines, 'net': lines, 'churn': lines }
+		self.churn_by_month = {} # YYYY-MM -> { 'added': lines, 'removed': lines, 'net': lines, 'churn': lines }
+		self.max_churn_day = (None, 0) # (date, churn_value)
+		self.max_net_growth_day = (None, 0) # (date, net_growth)
+		self.refactoring_periods = [] # list of (date, churn_ratio, net_change) where heavy refactoring occurred
+
 		# timezone
 		self.commits_by_timezone = {} # timezone -> commits
 
@@ -590,6 +597,28 @@ class GitDataCollector(DataCollector):
 							self.authors[author] = { 'lines_added' : 0, 'lines_removed' : 0 }
 						self.authors[author]['lines_added'] = self.authors[author].get('lines_added', 0) + inserted
 						self.authors[author]['lines_removed'] = self.authors[author].get('lines_removed', 0) + deleted
+
+						# Track code churn by date
+						if inserted > 0 or deleted > 0:
+							date_str = datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m-%d')
+							month_str = datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m')
+
+							# Daily churn
+							if date_str not in self.churn_by_date:
+								self.churn_by_date[date_str] = { 'added': 0, 'removed': 0, 'net': 0, 'churn': 0 }
+							self.churn_by_date[date_str]['added'] += inserted
+							self.churn_by_date[date_str]['removed'] += deleted
+							self.churn_by_date[date_str]['net'] = self.churn_by_date[date_str]['added'] - self.churn_by_date[date_str]['removed']
+							self.churn_by_date[date_str]['churn'] = self.churn_by_date[date_str]['added'] + self.churn_by_date[date_str]['removed']
+
+							# Monthly churn
+							if month_str not in self.churn_by_month:
+								self.churn_by_month[month_str] = { 'added': 0, 'removed': 0, 'net': 0, 'churn': 0 }
+							self.churn_by_month[month_str]['added'] += inserted
+							self.churn_by_month[month_str]['removed'] += deleted
+							self.churn_by_month[month_str]['net'] = self.churn_by_month[month_str]['added'] - self.churn_by_month[month_str]['removed']
+							self.churn_by_month[month_str]['churn'] = self.churn_by_month[month_str]['added'] + self.churn_by_month[month_str]['removed']
+
 					except ValueError:
 						logger.debug('Unexpected line "%s"' % line)
 				else:
@@ -626,7 +655,34 @@ class GitDataCollector(DataCollector):
 			a['date_first'] = date_first.strftime('%Y-%m-%d')
 			a['date_last'] = date_last.strftime('%Y-%m-%d')
 			a['timedelta'] = delta
-	
+
+			# Calculate churn rate by author (total churn / total commits)
+			total_churn = a.get('lines_added', 0) + a.get('lines_removed', 0)
+			a['churn'] = total_churn
+			a['churn_rate'] = total_churn / a['commits'] if a['commits'] > 0 else 0
+
+		# Analyze code churn patterns
+		for date_str, churn_data in self.churn_by_date.items():
+			churn_val = churn_data['churn']
+			net_val = churn_data['net']
+
+			# Track max churn day
+			if churn_val > self.max_churn_day[1]:
+				self.max_churn_day = (date_str, churn_val)
+
+			# Track max net growth day
+			if net_val > self.max_net_growth_day[1]:
+				self.max_net_growth_day = (date_str, net_val)
+
+			# Detect refactoring periods (high churn, low/negative net growth)
+			# Refactoring: churn > 100 lines and net growth < 10% of churn
+			if churn_val > 100 and abs(net_val) < (churn_val * 0.1):
+				churn_ratio = churn_data['removed'] / churn_val if churn_val > 0 else 0
+				self.refactoring_periods.append((date_str, churn_ratio, net_val))
+
+		# Sort refactoring periods by churn ratio (highest first)
+		self.refactoring_periods.sort(key=lambda x: x[1], reverse=True)
+
 	def getActiveDays(self):
 		return self.active_days
 
@@ -1074,6 +1130,59 @@ class HTMLReportCreator(ReportCreator):
 		for stamp in sorted(list(data.changes_by_date.keys())):
 			fg.write('%d %d\n' % (stamp, data.changes_by_date[stamp]['lines']))
 		fg.close()
+
+		# Code Churn Analysis
+		f.write(html_header(2, 'Code Churn Analysis'))
+		f.write('<dl>\n')
+		f.write('<dt>Total lines added</dt><dd>%d</dd>\n' % data.total_lines_added)
+		f.write('<dt>Total lines removed</dt><dd>%d</dd>\n' % data.total_lines_removed)
+		f.write('<dt>Total churn</dt><dd>%d lines (additions + deletions)</dd>\n' % (data.total_lines_added + data.total_lines_removed))
+		f.write('<dt>Net growth</dt><dd>%d lines</dd>\n' % (data.total_lines_added - data.total_lines_removed))
+		if data.total_lines_added + data.total_lines_removed > 0:
+			churn_ratio = data.total_lines_removed / (data.total_lines_added + data.total_lines_removed)
+			f.write('<dt>Churn ratio</dt><dd>%.2f%% (deletions/total churn)</dd>\n' % (churn_ratio * 100))
+		f.write('</dl>\n')
+
+		# Churn highlights
+		if data.max_churn_day[0]:
+			f.write(html_header(3, 'Churn Highlights'))
+			f.write('<dl>\n')
+			f.write('<dt>Highest churn day</dt><dd>%s (%d lines changed)</dd>\n' % data.max_churn_day)
+			f.write('<dt>Highest net growth day</dt><dd>%s (+%d lines)</dd>\n' % data.max_net_growth_day)
+			f.write('</dl>\n')
+
+		# Refactoring periods
+		if len(data.refactoring_periods) > 0:
+			f.write(html_header(3, 'Potential Refactoring Periods'))
+			f.write('<p>Days with high code churn but low net growth (indicating refactoring activity):</p>\n')
+			f.write('<table class="authors sortable" id="refactoring"><tr><th>Date</th><th>Churn Ratio</th><th>Net Change</th></tr>\n')
+			for (date_str, churn_ratio, net_change) in data.refactoring_periods[:10]:
+				f.write('<tr><td>%s</td><td>%.1f%%</td><td>%+d</td></tr>\n' % (date_str, churn_ratio * 100, net_change))
+			f.write('</table>\n')
+
+		# Monthly churn trends
+		if len(data.churn_by_month) > 0:
+			f.write(html_header(3, 'Monthly Churn Trends'))
+			f.write('<table class="authors sortable" id="monthly_churn"><tr>')
+			f.write('<th>Month</th><th>Added</th><th>Removed</th><th>Net</th><th>Churn</th></tr>\n')
+			for month_str in sorted(data.churn_by_month.keys(), reverse=True)[:12]:
+				month_data = data.churn_by_month[month_str]
+				f.write('<tr><td>%s</td><td>+%d</td><td>-%d</td><td>%+d</td><td>%d</td></tr>\n' %
+					(month_str, month_data['added'], month_data['removed'], month_data['net'], month_data['churn']))
+			f.write('</table>\n')
+
+		# Top churners (authors with highest churn rate)
+		f.write(html_header(3, 'Top Churners (by churn per commit)'))
+		authors_by_churn_rate = sorted(data.authors.items(), key=lambda x: x[1].get('churn_rate', 0), reverse=True)
+		f.write('<table class="authors sortable" id="churn_rate"><tr>')
+		f.write('<th>Author</th><th>Total Churn</th><th>Commits</th><th>Churn per Commit</th></tr>\n')
+		for i, (author, author_data) in enumerate(authors_by_churn_rate[:10]):
+			churn = author_data.get('churn', 0)
+			commits = author_data.get('commits', 0)
+			churn_rate = author_data.get('churn_rate', 0)
+			f.write('<tr><td>%s</td><td>%d</td><td>%d</td><td>%.1f</td></tr>\n' %
+				(author, churn, commits, churn_rate))
+		f.write('</table>\n')
 
 		f.write('</body></html>')
 		f.close()
