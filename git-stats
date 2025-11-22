@@ -251,11 +251,23 @@ class DataCollector:
 
 		# If flush is requested, delete old cache and start fresh
 		if flush:
+			# Delete the specific cache file
 			if os.path.exists(cachefile):
 				os.remove(cachefile)
-				logger.info('Cache flush requested - deleted old cache, starting fresh rebuild')
-			else:
-				logger.info('Cache flush requested - starting fresh rebuild')
+
+			# Also delete any per-repository cache files in the same directory
+			# (these have pattern gitstats.cache.* in multi-repo mode)
+			cache_dir = os.path.dirname(cachefile)
+			if cache_dir:
+				import glob
+				pattern = os.path.join(cache_dir, 'gitstats.cache.*')
+				for cache_file in glob.glob(pattern):
+					try:
+						os.remove(cache_file)
+					except Exception:
+						pass
+
+			logger.info('Cache flush requested - deleted all cache files, starting fresh rebuild')
 			return
 
 		if not os.path.exists(cachefile):
