@@ -2525,6 +2525,10 @@ class GitStats:
 		base_path, aggregated = all_data[0]
 		aggregated.projectname = "Multi-Repository Statistics"
 
+		# Ensure extensions is initialized
+		if not hasattr(aggregated, 'extensions'):
+			aggregated.extensions = {}
+
 		# Aggregate data from remaining repositories
 		for repo_path, repo_data in all_data[1:]:
 			# Merge authors
@@ -2567,6 +2571,14 @@ class GitStats:
 				aggregated.activity_by_hour_of_day[hour] = aggregated.activity_by_hour_of_day.get(hour, 0) + count
 			for day, count in repo_data.activity_by_day_of_week.items():
 				aggregated.activity_by_day_of_week[day] = aggregated.activity_by_day_of_week.get(day, 0) + count
+
+			# Merge extensions data
+			if hasattr(repo_data, 'extensions'):
+				for ext, stats in repo_data.extensions.items():
+					if ext not in aggregated.extensions:
+						aggregated.extensions[ext] = {'files': 0, 'lines': 0}
+					aggregated.extensions[ext]['files'] += stats.get('files', 0)
+					aggregated.extensions[ext]['lines'] += stats.get('lines', 0)
 
 			# Update first/last commit stamps
 			if repo_data.first_commit_stamp > 0:
