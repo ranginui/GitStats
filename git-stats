@@ -399,10 +399,10 @@ class GitDataCollector(DataCollector):
 		if hasattr(args, 'branch') and args.branch:
 			branch = args.branch
 		else:
-			branch = '--all'  # Default to all branches
+			branch = 'HEAD'
 		return ' '.join(filters), branch
 
-	def _get_new_commits(self, git_branch='--all'):
+	def _get_new_commits(self, git_branch='HEAD'):
 		"""
 		Check if there are new commits since last cache update.
 		Returns (has_new_commits, commit_range_filter)
@@ -577,7 +577,7 @@ class GitDataCollector(DataCollector):
 
 		# Build git filter arguments
 		git_filter = ''
-		git_branch = '--all'  # Collect from all branches by default
+		git_branch = 'HEAD'
 		if args:
 			git_filter, git_branch = self._build_git_log_filter(args)
 
