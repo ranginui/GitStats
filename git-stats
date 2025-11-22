@@ -1219,7 +1219,19 @@ class HTMLReportCreator(ReportCreator):
 			else:
 				f.write('<td>0.00</td>')
 		f.write('</tr></table>')
-		f.write('<img src="hour_of_day.{0}" alt="Hour of Day" />'.format(IMAGE_TYPE))
+
+		# Interactive chart
+		labels = [str(i) for i in range(24)]
+		data_values = [hour_of_day.get(i, 0) for i in range(24)]
+		datasets = [{
+			'label': 'Commits',
+			'data': data_values,
+			'backgroundColor': 'rgba(54, 162, 235, 0.5)',
+			'borderColor': 'rgba(54, 162, 235, 1)',
+			'borderWidth': 1
+		}]
+		self.printChart(f, 'hourOfDayChart', 'bar', labels, datasets,
+						'Commits by Hour of Day', 'Hour', 'Commits')
 		fg = open(path + '/hour_of_day.dat', 'w')
 		for i in range(0, 24):
 			if i in hour_of_day:
@@ -1247,7 +1259,20 @@ class HTMLReportCreator(ReportCreator):
 				f.write('<td>0</td>')
 			f.write('</tr>')
 		f.write('</table></div>')
-		f.write('<img src="day_of_week.{0}" alt="Day of Week" />'.format(IMAGE_TYPE))
+
+		# Interactive chart
+		day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+		day_data = [day_of_week.get(d, 0) for d in range(7)]
+		datasets = [{
+			'label': 'Commits',
+			'data': day_data,
+			'backgroundColor': 'rgba(75, 192, 192, 0.5)',
+			'borderColor': 'rgba(75, 192, 192, 1)',
+			'borderWidth': 1
+		}]
+		self.printChart(f, 'dayOfWeekChart', 'bar', day_names, datasets,
+						'Commits by Day of Week', 'Day', 'Commits')
+
 		fp.close()
 
 		# Hour of Week
@@ -1281,16 +1306,25 @@ class HTMLReportCreator(ReportCreator):
 		f.write(html_header(2, 'Month of Year'))
 		f.write('<div class="vtable"><table>')
 		f.write('<tr><th>Month</th><th>Commits (%)</th></tr>')
-		fp = open (path + '/month_of_year.dat', 'w')
 		for mm in range(1, 13):
 			commits = 0
 			if mm in data.activity_by_month_of_year:
 				commits = data.activity_by_month_of_year[mm]
 			f.write('<tr><td>%d</td><td>%d (%.2f %%)</td></tr>' % (mm, commits, (100.0 * commits) / data.getTotalCommits()))
-			fp.write('%d %d\n' % (mm, commits))
-		fp.close()
 		f.write('</table></div>')
-		f.write('<img src="month_of_year.{0}" alt="Month of Year" />'.format(IMAGE_TYPE))
+
+		# Interactive Chart.js version
+		month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+		month_data = [data.activity_by_month_of_year.get(mm, 0) for mm in range(1, 13)]
+		datasets = [{
+			'label': 'Commits',
+			'data': month_data,
+			'backgroundColor': 'rgba(255, 159, 64, 0.5)',
+			'borderColor': 'rgba(255, 159, 64, 1)',
+			'borderWidth': 1
+		}]
+		self.printChart(f, 'monthOfYearChart', 'bar', month_names, datasets,
+		                'Commits by Month of Year', 'Month', 'Commits')
 
 		# Commits by year/month
 		f.write(html_header(2, 'Commits by year/month'))
@@ -1298,11 +1332,21 @@ class HTMLReportCreator(ReportCreator):
 		for yymm in reversed(sorted(list(data.commits_by_month.keys()))):
 			f.write('<tr><td>%s</td><td>%d</td></tr>' % (yymm, data.commits_by_month[yymm]))
 		f.write('</table></div>')
-		f.write('<img src="commits_by_year_month.{0}" alt="Commits by year/month" />'.format(IMAGE_TYPE))
-		fg = open(path + '/commits_by_year_month.dat', 'w')
-		for yymm in sorted(list(data.commits_by_month.keys())):
-			fg.write('%s %s\n' % (yymm, data.commits_by_month[yymm]))
-		fg.close()
+
+		# Interactive Chart.js version
+		months = sorted(list(data.commits_by_month.keys()))
+		labels = months  # Already in YYYY-MM format
+		commit_counts = [data.commits_by_month[month] for month in months]
+		datasets = [{
+			'label': 'Commits',
+			'data': commit_counts,
+			'backgroundColor': 'rgba(54, 162, 235, 0.5)',
+			'borderColor': 'rgba(54, 162, 235, 1)',
+			'borderWidth': 2,
+			'fill': True
+		}]
+		self.printChart(f, 'commitsByYearMonthChart', 'line', labels, datasets,
+		                'Commits by Year/Month', 'Month', 'Commits')
 
 		# Commits by year
 		f.write(html_header(2, 'Commits by Year'))
@@ -1310,11 +1354,20 @@ class HTMLReportCreator(ReportCreator):
 		for yy in reversed(sorted(list(data.commits_by_year.keys()))):
 			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td></tr>' % (yy, data.commits_by_year[yy], (100.0 * data.commits_by_year[yy]) / data.getTotalCommits()))
 		f.write('</table></div>')
-		f.write('<img src="commits_by_year.{0}" alt="Commits by Year" />'.format(IMAGE_TYPE))
-		fg = open(path + '/commits_by_year.dat', 'w')
-		for yy in sorted(list(data.commits_by_year.keys())):
-			fg.write('%d %d\n' % (yy, data.commits_by_year[yy]))
-		fg.close()
+
+		# Interactive Chart.js version
+		years = sorted(list(data.commits_by_year.keys()))
+		labels = [str(year) for year in years]
+		commit_counts = [data.commits_by_year[year] for year in years]
+		datasets = [{
+			'label': 'Commits',
+			'data': commit_counts,
+			'backgroundColor': 'rgba(255, 99, 132, 0.5)',
+			'borderColor': 'rgba(255, 99, 132, 1)',
+			'borderWidth': 1
+		}]
+		self.printChart(f, 'commitsByYearChart', 'bar', labels, datasets,
+		                'Commits by Year', 'Year', 'Commits')
 
 		# Commits by timezone
 		f.write(html_header(2, 'Commits by Timezone'))
@@ -1497,19 +1550,32 @@ class HTMLReportCreator(ReportCreator):
 		domains_by_commits.reverse() # most first
 		f.write('<div class="vtable"><table>')
 		f.write('<tr><th>Domains</th><th>Total (%)</th></tr>')
-		fp = open(path + '/domains.dat', 'w')
+
+		# Collect domain data for both table and chart
+		domain_labels = []
+		domain_commits = []
 		n = 0
 		for domain in domains_by_commits:
 			if n == conf['max_domains']:
 				break
-			commits = 0
 			n += 1
 			info = data.getDomainInfo(domain)
-			fp.write('%s %d %d\n' % (domain, n , info['commits']))
+			domain_labels.append(domain)
+			domain_commits.append(info['commits'])
 			f.write('<tr><th>%s</th><td>%d (%.2f%%)</td></tr>' % (domain, info['commits'], (100.0 * info['commits'] / totalcommits)))
 		f.write('</table></div>')
-		f.write('<img src="domains.{0}" alt="Commits by Domains" />'.format(IMAGE_TYPE))
-		fp.close()
+
+		# Interactive Chart.js version (horizontal bar chart)
+		if domain_labels:
+			datasets = [{
+				'label': 'Commits',
+				'data': domain_commits,
+				'backgroundColor': 'rgba(153, 102, 255, 0.5)',
+				'borderColor': 'rgba(153, 102, 255, 1)',
+				'borderWidth': 1
+			}]
+			self.printChart(f, 'domainsByCommitsChart', 'bar', domain_labels, datasets,
+			                'Commits by Domains', 'Commits', 'Domain')
 
 		f.write('</body></html>')
 		f.close()
@@ -1530,19 +1596,21 @@ class HTMLReportCreator(ReportCreator):
 		# Files :: File count by date
 		f.write(html_header(2, 'File count by date'))
 
-		# use set to get rid of duplicate/unnecessary entries
-		files_by_date = set()
-		for stamp in sorted(list(data.files_by_stamp.keys())):
-			files_by_date.add('%s %d' % (datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m-%d'), data.files_by_stamp[stamp]))
-
-		fg = open(path + '/files_by_date.dat', 'w')
-		for line in sorted(list(files_by_date)):
-			fg.write('%s\n' % line)
-		#for stamp in sorted(data.files_by_stamp.keys()):
-		#	fg.write('%s %d\n' % (datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m-%d'), data.files_by_stamp[stamp]))
-		fg.close()
-			
-		f.write('<img src="files_by_date.{0}" alt="Files by Date" />'.format(IMAGE_TYPE))
+		# Interactive Chart.js version
+		sorted_stamps = sorted(list(data.files_by_stamp.keys()))
+		labels = [datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m-%d') for stamp in sorted_stamps]
+		file_counts = [data.files_by_stamp[stamp] for stamp in sorted_stamps]
+		datasets = [{
+			'label': 'File Count',
+			'data': file_counts,
+			'backgroundColor': 'rgba(75, 192, 192, 0.2)',
+			'borderColor': 'rgba(75, 192, 192, 1)',
+			'borderWidth': 2,
+			'fill': True,
+			'tension': 0.1
+		}]
+		self.printChart(f, 'filesByDateChart', 'line', labels, datasets,
+		                'File Count by Date', 'Date', 'Files')
 
 		#f.write('<h2>Average file size by date</h2>')
 
@@ -1612,10 +1680,28 @@ class HTMLReportCreator(ReportCreator):
 		f.write('</dl>\n')
 
 		f.write(html_header(2, 'Lines of Code'))
-		f.write('<img src="lines_of_code.{0}" />'.format(IMAGE_TYPE))
 
+		# Prepare data for interactive chart
+		sorted_stamps = sorted(list(data.changes_by_date.keys()))
+		labels = [datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m-%d') for stamp in sorted_stamps]
+		line_counts = [data.changes_by_date[stamp]['lines'] for stamp in sorted_stamps]
+
+		# Interactive chart
+		datasets = [{
+			'label': 'Lines of Code',
+			'data': line_counts,
+			'backgroundColor': 'rgba(153, 102, 255, 0.2)',
+			'borderColor': 'rgba(153, 102, 255, 1)',
+			'borderWidth': 2,
+			'fill': True,
+			'tension': 0.1
+		}]
+		self.printChart(f, 'linesOfCodeChart', 'line', labels, datasets,
+						'Lines of Code Over Time', 'Date', 'Lines')
+
+		# Still write data file for gnuplot compatibility
 		fg = open(path + '/lines_of_code.dat', 'w')
-		for stamp in sorted(list(data.changes_by_date.keys())):
+		for stamp in sorted_stamps:
 			fg.write('%d %d\n' % (stamp, data.changes_by_date[stamp]['lines']))
 		fg.close()
 
@@ -1884,6 +1970,7 @@ plot 'lines_of_code.dat' using 1:2 w lines
 	<link rel="stylesheet" href="%s" type="text/css" />
 	<meta name="generator" content="GitStats %s" />
 	<script type="text/javascript" src="sortable.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 	<script type="text/javascript">
 		// Dark mode toggle functionality
 		(function() {
@@ -1937,7 +2024,58 @@ plot 'lines_of_code.dat' using 1:2 w lines
 </ul>
 </div>
 """)
-		
+
+	def printChart(self, f, chart_id, chart_type, labels, datasets, title, x_label='', y_label=''):
+		"""
+		Generate an interactive Chart.js chart
+		chart_type: 'line', 'bar', 'pie', etc.
+		datasets: list of {label, data, backgroundColor, borderColor, fill}
+		"""
+		import json
+
+		f.write('<div class="chart-container" style="position: relative; height:400px; margin: 20px 0;">\n')
+		f.write(f'<canvas id="{chart_id}"></canvas>\n')
+		f.write('</div>\n')
+		f.write('<script>\n')
+		f.write('(function() {\n')
+		f.write(f'const ctx = document.getElementById(\'{chart_id}\').getContext(\'2d\');\n')
+		f.write(f'const chart = new Chart(ctx, {{\n')
+		f.write(f'  type: \'{chart_type}\',\n')
+		f.write(f'  data: {{\n')
+		f.write(f'    labels: {json.dumps(labels)},\n')
+		f.write(f'    datasets: {json.dumps(datasets)}\n')
+		f.write(f'  }},\n')
+		f.write(f'  options: {{\n')
+		f.write(f'    responsive: true,\n')
+		f.write(f'    maintainAspectRatio: false,\n')
+		f.write(f'    plugins: {{\n')
+		f.write(f'      title: {{\n')
+		f.write(f'        display: true,\n')
+		f.write(f'        text: {json.dumps(title)}\n')
+		f.write(f'      }},\n')
+		f.write(f'      legend: {{\n')
+		f.write(f'        display: {str(len(datasets) > 1).lower()}\n')
+		f.write(f'      }}\n')
+		f.write(f'    }},\n')
+		f.write(f'    scales: {{\n')
+
+		if chart_type != 'pie':
+			f.write(f'      x: {{\n')
+			if x_label:
+				f.write(f'        title: {{ display: true, text: {json.dumps(x_label)} }}\n')
+			f.write(f'      }},\n')
+			f.write(f'      y: {{\n')
+			f.write(f'        beginAtZero: true')
+			if y_label:
+				f.write(f',\n        title: {{ display: true, text: {json.dumps(y_label)} }}')
+			f.write(f'\n      }}\n')
+
+		f.write(f'    }}\n')
+		f.write(f'  }}\n')
+		f.write(f'}});\n')
+		f.write('})();\n')
+		f.write('</script>\n')
+
 
 class GitStats:
 	def __init__(self, args=None):
