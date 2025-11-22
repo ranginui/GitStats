@@ -300,6 +300,21 @@ class GitDataCollector(DataCollector):
 		logger.debug('Git filter: %s' % git_filter if git_filter else 'Git filter: (none)')
 		logger.debug('Git branch: %s' % git_branch)
 
+		# Parse date filters for tag filtering
+		since_stamp = None
+		until_stamp = None
+		if args:
+			if hasattr(args, 'since') and args.since:
+				try:
+					since_stamp = int(getpipeoutput(['git log --since="%s" --pretty=format:"%%at" -n 1' % args.since]))
+				except Exception:
+					pass
+			if hasattr(args, 'until') and args.until:
+				try:
+					until_stamp = int(getpipeoutput(['git log --until="%s" --pretty=format:"%%at" -n 1' % args.until]))
+				except Exception:
+					pass
+
 		try:
 			cmd = 'git log %s %s' % (git_filter, git_branch)
 			self.total_authors = int(getpipeoutput([cmd, 'git shortlog -s', 'wc -l']))
@@ -343,12 +358,12 @@ class GitDataCollector(DataCollector):
 		self.tags = {}
 		lines = getpipeoutput(['git show-ref --tags']).split('\n')
 		tag_lines = [l for l in lines if l]
-		logger.debug('Processing %d tags' % len(tag_lines))
+		logger.debug('Processing %d tags (will filter by date if applicable)' % len(tag_lines))
 		for line in tqdm(tag_lines, desc='Processing tags', unit='tags', disable=logger.level > logging.INFO):
 			(hash, tag) = line.split(' ')
 
 			tag = tag.replace('refs/tags/', '')
-			output = getpipeoutput(['git log "%s" --pretty=format:"%%at %%an" -n 1' % hash])
+			output = getpipeoutput(['git log "%s" --pretty=format:"%%at %%an" -n 1' % hash], quiet=True)
 			if len(output) > 0:
 				parts = output.split(' ')
 				stamp = 0
@@ -356,16 +371,25 @@ class GitDataCollector(DataCollector):
 					stamp = int(parts[0])
 				except ValueError:
 					stamp = 0
+
+				# Filter tags by date range if specified
+				if since_stamp is not None and stamp < since_stamp:
+					continue
+				if until_stamp is not None and stamp > until_stamp:
+					continue
+
 				self.tags[tag] = { 'stamp': stamp, 'hash' : hash, 'date' : datetime.datetime.fromtimestamp(stamp).strftime('%Y-%m-%d'), 'commits': 0, 'authors': {} }
 
 		# collect info on tags, starting from latest
 		tags_sorted_by_date_desc = list(map(lambda el : el[1], reversed(sorted(map(lambda el : (el[1]['date'], el[0]), self.tags.items())))))
 		prev = None
+		if len(tags_sorted_by_date_desc) > 0:
+			logger.debug('Collecting statistics for %d filtered tags' % len(tags_sorted_by_date_desc))
 		for tag in reversed(tags_sorted_by_date_desc):
 			cmd = 'git shortlog -s "%s"' % tag
 			if prev != None:
 				cmd += ' "^%s"' % prev
-			output = getpipeoutput([cmd])
+			output = getpipeoutput([cmd], quiet=True)
 			if len(output) == 0:
 				continue
 			prev = tag
