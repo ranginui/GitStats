@@ -471,6 +471,8 @@ class GitDataCollector(DataCollector):
 			'total_authors': getattr(self, 'total_authors', 0),
 			'total_commits': getattr(self, 'total_commits', 0),
 			'total_files': getattr(self, 'total_files', 0),
+			'tags': getattr(self, 'tags', {}),
+			'extensions': getattr(self, 'extensions', {}),
 		}
 
 	def _save_progressive_cache(self, last_commit_hash=None):
@@ -542,6 +544,8 @@ class GitDataCollector(DataCollector):
 		self.total_authors = cached_data.get('total_authors', 0)
 		self.total_commits = cached_data.get('total_commits', 0)
 		self.total_files = cached_data.get('total_files', 0)
+		self.tags = cached_data.get('tags', {})
+		self.extensions = cached_data.get('extensions', {})
 
 		logger.info('Restored collected data from cache')
 		return True
@@ -2313,29 +2317,7 @@ plot 'lines_of_code.dat' using 1:2 w lines
 """.format(IMAGE_TYPE))
 		f.close()
 
-		os.chdir(path)
-		files = glob.glob(path + '/*.plot')
-		logger.info('Rendering %d graphs...' % len(files))
-
-		# Helper function for parallel graph rendering
-		def render_graph(plot_file):
-			out = getpipeoutput([gnuplot_cmd + ' "%s"' % plot_file])
-			return (plot_file, out)
-
-		# Use parallel processing with progress bar
-		with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-			futures = {executor.submit(render_graph, f): f for f in files}
-			pbar = tqdm(total=len(futures), desc='Rendering graphs', unit='graphs', disable=logger.level > logging.INFO)
-
-			for future in as_completed(futures):
-				try:
-					plot_file, out = future.result()
-					if len(out) > 0:
-						logger.info(out)
-				except Exception as e:
-					logger.warning('Failed to render graph: %s' % str(e))
-				pbar.update(1)
-			pbar.close()
+		# Note: gnuplot graph rendering removed - using Chart.js for interactive graphs instead
 
 	def printHeader(self, f, title = ''):
 		f.write(
