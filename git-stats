@@ -2313,6 +2313,60 @@ plot 'lines_of_code.dat' using 1:2 w lines
 		f.write('</script>\n')
 
 
+def process_repository_worker(gitpath, outputpath, args_dict, flush_cache):
+	"""
+	Worker function for parallel repository processing.
+
+	Args:
+		gitpath: Path to git repository
+		outputpath: Path to output directory
+		args_dict: Dictionary of command-line arguments
+		flush_cache: Whether to flush cache
+
+	Returns:
+		Tuple of (gitpath, repo_data, success, error_message)
+	"""
+	import os
+	import hashlib
+
+	# Recreate args object from dict
+	class Args:
+		pass
+	args = Args()
+	for key, value in args_dict.items():
+		setattr(args, key, value)
+
+	try:
+		# Each worker needs to work in the repository directory
+		original_dir = os.getcwd()
+		os.chdir(gitpath)
+
+		# Create data collector
+		repo_data = GitDataCollector()
+
+		# Load cache for this specific repository
+		repo_hash = hashlib.md5(os.path.abspath(gitpath).encode()).hexdigest()[:8]
+		repo_cachefile = os.path.join(outputpath, 'gitstats.cache.%s' % repo_hash)
+		repo_data.loadCache(repo_cachefile, flush=flush_cache)
+
+		# Collect data
+		repo_data.collect(gitpath, args=args)
+
+		# Save cache for this repository
+		repo_data.saveCache(repo_cachefile)
+
+		# Restore original directory
+		os.chdir(original_dir)
+
+		return (gitpath, repo_data, True, None)
+
+	except Exception as e:
+		import traceback
+		error_msg = 'Error processing repository %s: %s\n%s' % (gitpath, str(e), traceback.format_exc())
+		logger.error(error_msg)
+		return (gitpath, None, False, error_msg)
+
+
 class GitStats:
 	def __init__(self, args=None):
 		self.args = args
@@ -2462,28 +2516,51 @@ class GitStats:
 			os.chdir(gitpaths[0])
 			data.collect(gitpaths[0], args=self.args)
 		else:
-			# Multi-repository mode - collect and aggregate
+			# Multi-repository mode - collect in parallel and aggregate
+			logger.info('Processing %d repositories in parallel...' % len(gitpaths))
+
+			# Convert args to dictionary for worker function
+			args_dict = {}
+			if self.args:
+				args_dict = vars(self.args)
+
+			flush_cache = getattr(self.args, 'flush', False)
+
+			# Process repositories in parallel using ThreadPoolExecutor
+			# Use threads instead of processes since git operations are I/O bound
+			max_workers = min(len(gitpaths), os.cpu_count() or 4)
 			all_data = []
-			for idx, gitpath in enumerate(gitpaths, 1):
-				logger.info('Collecting data from repository %d/%d: %s' % (idx, len(gitpaths), gitpath))
-				os.chdir(gitpath)
-				repo_data = GitDataCollector()
+			errors = []
 
-				# Load cache for this specific repository
-				# Use a cache file based on the repository path to keep caches separate
-				repo_hash = hashlib.md5(os.path.abspath(gitpath).encode()).hexdigest()[:8]
-				repo_cachefile = os.path.join(outputpath, 'gitstats.cache.%s' % repo_hash)
-				flush_cache = getattr(self.args, 'flush', False)
-				repo_data.loadCache(repo_cachefile, flush=flush_cache)
+			with ThreadPoolExecutor(max_workers=max_workers) as executor:
+				# Submit all repository processing tasks
+				future_to_path = {
+					executor.submit(process_repository_worker, gitpath, outputpath, args_dict, flush_cache): gitpath
+					for gitpath in gitpaths
+				}
 
-				# Collect data
-				repo_data.collect(gitpath, args=self.args)
+				# Collect results as they complete
+				for future in as_completed(future_to_path):
+					gitpath = future_to_path[future]
+					try:
+						result_path, repo_data, success, error_msg = future.result()
+						if success:
+							all_data.append((result_path, repo_data))
+							logger.info('Completed processing repository: %s' % result_path)
+						else:
+							errors.append(error_msg)
+							logger.error('Failed to process repository %s: %s' % (result_path, error_msg))
+					except Exception as e:
+						error_msg = 'Unexpected error processing %s: %s' % (gitpath, str(e))
+						errors.append(error_msg)
+						logger.error(error_msg)
 
-				# Save cache for this repository
-				repo_data.saveCache(repo_cachefile)
+			if errors:
+				logger.warning('Encountered %d errors during parallel processing' % len(errors))
 
-				all_data.append((gitpath, repo_data))
-				os.chdir(rundir)
+			if not all_data:
+				logger.error('Failed to process any repositories!')
+				sys.exit(1)
 
 			# Aggregate all repository data
 			logger.info('Aggregating data from %d repositories...' % len(all_data))
