@@ -16,36 +16,114 @@ import time
 import zlib
 
 try:
-	from tqdm import tqdm
+	from tqdm import tqdm as tqdm_real
 	TQDM_AVAILABLE = True
 except ImportError:
 	TQDM_AVAILABLE = False
-	# Fallback progress indicator
-	class tqdm:
-		def __init__(self, iterable=None, total=None, desc=None, disable=False, **kwargs):
-			self.iterable = iterable
-			self.total = total
-			self.desc = desc
-			self.disable = disable
-			self.n = 0
+	tqdm_real = None
 
-		def __iter__(self):
-			return iter(self.iterable)
+# Custom progress indicator with fallback
+class ProgressIndicator:
+	"""Smart progress indicator that uses tqdm if available, falls back to simple ASCII progress"""
 
-		def __enter__(self):
-			return self
+	def __init__(self, iterable=None, total=None, desc=None, disable=False, unit='it', **kwargs):
+		self.iterable = iterable
+		self.total = total or (len(iterable) if iterable and hasattr(iterable, '__len__') else None)
+		self.desc = desc or ''
+		self.disable = disable
+		self.unit = unit
+		self.n = 0
+		self.started = False
+		self.use_tqdm = TQDM_AVAILABLE and not disable
 
-		def __exit__(self, *args):
-			pass
+		if self.use_tqdm:
+			self.pbar = tqdm_real(iterable=iterable, total=total, desc=desc, disable=disable, unit=unit, **kwargs)
+		else:
+			self.pbar = None
+			self.last_percent = -1
 
-		def update(self, n=1):
+	def __iter__(self):
+		if self.use_tqdm:
+			# Iterate through tqdm directly - it handles the progress bar
+			yield from self.pbar
+		elif not self.iterable:
+			return
+		else:
+			# Use the fallback progress generator
+			yield from self._iterate_with_progress()
+
+	def _iterate_with_progress(self):
+		"""Generator that yields items with progress updates"""
+		self.started = True
+		if not self.disable and self.total:
+			self._print_progress(0)
+
+		for i, item in enumerate(self.iterable):
+			yield item
+			self.n = i + 1
+			if not self.disable and self.total:
+				self._print_progress(self.n)
+
+		if not self.disable:
+			self._finish()
+
+	def __enter__(self):
+		if self.use_tqdm:
+			return self.pbar.__enter__()
+		return self
+
+	def __exit__(self, *args):
+		if self.use_tqdm:
+			return self.pbar.__exit__(*args)
+		self._finish()
+
+	def update(self, n=1):
+		if self.use_tqdm:
+			self.pbar.update(n)
+		else:
 			self.n += n
+			if not self.disable and self.total:
+				self._print_progress(self.n)
 
-		def set_description(self, desc):
-			self.desc = desc
+	def set_description(self, desc):
+		self.desc = desc
+		if self.use_tqdm:
+			self.pbar.set_description(desc)
 
-		def close(self):
-			pass
+	def close(self):
+		if self.use_tqdm:
+			self.pbar.close()
+		else:
+			self._finish()
+
+	def _print_progress(self, current):
+		"""Simple ASCII progress bar fallback"""
+		if self.total is None or self.total == 0:
+			return
+
+		percent = int((current / self.total) * 100)
+
+		# Only update on percent change to reduce output spam
+		if percent != self.last_percent:
+			self.last_percent = percent
+			bar_length = 40
+			filled = int((current / self.total) * bar_length)
+			bar = '█' * filled + '░' * (bar_length - filled)
+
+			# Format with description, bar, percentage, and count
+			msg = f'\r{self.desc}: [{bar}] {percent}% ({current}/{self.total} {self.unit})'
+			print(msg, end='', flush=True)
+
+	def _finish(self):
+		"""Complete the progress bar"""
+		if not self.disable and not self.use_tqdm and self.total:
+			# Print final 100% state
+			bar_length = 40
+			bar = '█' * bar_length
+			print(f'\r{self.desc}: [{bar}] 100% ({self.total}/{self.total} {self.unit})')
+
+# Alias for backward compatibility and easier use
+tqdm = ProgressIndicator
 
 __version__ = '1.0.0-python3'
 
@@ -264,10 +342,9 @@ class GitDataCollector(DataCollector):
 		# tags
 		self.tags = {}
 		lines = getpipeoutput(['git show-ref --tags']).split('\n')
-		logger.debug('Processing %d tags' % len([l for l in lines if l]))
-		for line in tqdm(lines, desc='Processing tags', disable=logger.level > logging.INFO):
-			if len(line) == 0:
-				continue
+		tag_lines = [l for l in lines if l]
+		logger.debug('Processing %d tags' % len(tag_lines))
+		for line in tqdm(tag_lines, desc='Processing tags', unit='tags', disable=logger.level > logging.INFO):
 			(hash, tag) = line.split(' ')
 
 			tag = tag.replace('refs/tags/', '')
@@ -303,16 +380,21 @@ class GitDataCollector(DataCollector):
 		# Outputs "<stamp> <date> <time> <timezone> <author> '<' <mail> '>'"
 		cmd = 'git rev-list --pretty=format:"%%at %%ai %%an <%%aE>" %s %s' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd, 'grep -v ^commit']).split('\n')
-		logger.info('Processing %d commits...' % len([l for l in lines if l]))
-		for line in tqdm(lines, desc='Analyzing commits', disable=logger.level > logging.INFO):
-			parts = line.split(' ', 4)
-			author = ''
+		commit_lines = [l for l in lines if l]
+		logger.info('Processing %d commits...' % len(commit_lines))
+		for line in tqdm(commit_lines, desc='Analyzing commits', unit='commits', disable=logger.level > logging.INFO):
 			try:
-				stamp = int(parts[0])
-			except ValueError:
-				stamp = 0
-			timezone = parts[3]
-			author, mail = parts[4].split('<', 1)
+				parts = line.split(' ', 4)
+				author = ''
+				try:
+					stamp = int(parts[0])
+				except ValueError:
+					stamp = 0
+				timezone = parts[3]
+				author, mail = parts[4].split('<', 1)
+			except Exception as e:
+				logger.debug('Error processing commit line: %s - %s' % (line, str(e)))
+				continue
 			author = author.rstrip()
 			mail = mail.rstrip('>')
 			domain = '?'
@@ -411,7 +493,7 @@ class GitDataCollector(DataCollector):
 		revlines = getpipeoutput([cmd, 'grep -v ^commit']).strip().split('\n')
 		lines = []
 		logger.info('Counting files in %d revisions...' % len(revlines))
-		for revline in tqdm(revlines, desc='Counting files', disable=logger.level > logging.INFO):
+		for revline in tqdm(revlines, desc='Counting files', unit='revisions', disable=logger.level > logging.INFO):
 			time, rev = revline.split(' ')
 			linecount = self.getFilesInCommit(rev)
 			lines.append('%d %d' % (int(time), linecount))
@@ -430,11 +512,10 @@ class GitDataCollector(DataCollector):
 		# extensions
 		self.extensions = {} # extension -> files, lines
 		lines = getpipeoutput(['git ls-tree -r -z %s' % git_branch]).split('\000')
-		self.total_files = len(lines)
+		file_lines = [l for l in lines if l]
+		self.total_files = len(file_lines)
 		logger.info('Analyzing %d files...' % self.total_files)
-		for line in tqdm(lines, desc='Analyzing files', disable=logger.level > logging.INFO):
-			if len(line) == 0:
-				continue
+		for line in tqdm(file_lines, desc='Analyzing extensions', unit='files', disable=logger.level > logging.INFO):
 			parts = re.split('\s+', line, 4)
 			sha1 = parts[2]
 			filename = parts[3]
@@ -463,10 +544,14 @@ class GitDataCollector(DataCollector):
 		cmd = 'git log %s %s --shortstat --pretty=format:"%%at %%an"' % (git_filter, git_branch)
 		lines = getpipeoutput([cmd]).split('\n')
 		lines.reverse()
-		logger.info('Calculating line statistics...')
+		logger.info('Calculating line statistics (%d entries)...' % len(lines))
 		files = 0; inserted = 0; deleted = 0; total_lines = 0
 		author = None
+
+		# Add progress bar for line statistics processing
+		pbar = tqdm(total=len(lines), desc='Processing line stats', unit='lines', disable=logger.level > logging.INFO)
 		for line in lines:
+			pbar.update(1)
 			if len(line) == 0:
 				continue
 
@@ -497,6 +582,7 @@ class GitDataCollector(DataCollector):
 					logger.debug('Failed to handle line "%s"' % line)
 					(files, inserted, deleted) = (0, 0, 0)
 				#self.changes_by_date[stamp] = { 'files': files, 'ins': inserted, 'del': deleted }
+		pbar.close()
 		self.total_lines = total_lines
 	
 	def refine(self):
@@ -1001,6 +1087,18 @@ class HTMLReportCreator(ReportCreator):
 	def createGraphs(self, path):
 		logger.info('Generating graphs...')
 
+		# Define all plot files we'll create
+		plot_files = [
+			('hour_of_day', 'Hour of Day'),
+			('day_of_week', 'Day of Week'),
+			('domains', 'Domains'),
+			('month_of_year', 'Month of Year'),
+			('commits_by_year_month', 'Commits by Year/Month'),
+			('commits_by_year', 'Commits by Year'),
+			('files_by_date', 'Files by Date'),
+			('lines_of_code', 'Lines of Code')
+		]
+
 		# hour of day
 		f = open(path + '/hour_of_day.plot', 'w')
 		f.write(GNUPLOT_COMMON)
@@ -1132,7 +1230,9 @@ plot 'lines_of_code.dat' using 1:2 w lines
 
 		os.chdir(path)
 		files = glob.glob(path + '/*.plot')
-		for f in files:
+		logger.info('Rendering %d graphs...' % len(files))
+
+		for f in tqdm(files, desc='Rendering graphs', unit='graphs', disable=logger.level > logging.INFO):
 			out = getpipeoutput([gnuplot_cmd + ' "%s"' % f])
 			if len(out) > 0:
 				logger.info(out)
@@ -1215,19 +1315,46 @@ class GitStats:
 
 		cachefile = os.path.join(outputpath, 'gitstats.cache')
 
-		logger.info('Collecting data...')
+		# Overall progress tracking
+		phases = [
+			'Loading cache',
+			'Collecting data',
+			'Refining data',
+			'Saving cache',
+			'Generating HTML',
+			'Creating graphs'
+		]
+		overall_progress = tqdm(total=len(phases), desc='Overall progress', unit='phase',
+								disable=logger.level != logging.INFO, position=0, leave=True)
+
+		overall_progress.set_description('Phase 1/6: Loading cache')
+		overall_progress.update(0)
 		data = GitDataCollector()
 		data.loadCache(cachefile)
+		overall_progress.update(1)
+
+		overall_progress.set_description('Phase 2/6: Collecting data')
 		data.collect(gitpath, args=self.args)
-		logger.info('Refining data...')
-		data.saveCache(cachefile)
+		overall_progress.update(1)
+
+		overall_progress.set_description('Phase 3/6: Refining data')
 		data.refine()
+		overall_progress.update(1)
+
+		overall_progress.set_description('Phase 4/6: Saving cache')
+		data.saveCache(cachefile)
+		overall_progress.update(1)
 
 		os.chdir(rundir)
 
-		logger.info('Generating report...')
+		overall_progress.set_description('Phase 5/6: Generating HTML')
 		report = HTMLReportCreator()
 		report.create(data, outputpath)
+		overall_progress.update(1)
+
+		overall_progress.set_description('Phase 6/6: Complete')
+		overall_progress.update(1)
+		overall_progress.close()
 
 		time_end = time.time()
 		exectime_internal = time_end - time_start
