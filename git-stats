@@ -700,17 +700,21 @@ class GitDataCollector(DataCollector):
 
 		# collect info on tags, starting from latest
 		tags_sorted_by_date_desc = list(map(lambda el : el[1], reversed(sorted(map(lambda el : (el[1]['date'], el[0]), self.tags.items())))))
-		prev = None
-		prev_major_version = None
+
+		# Track the previous tag for each major version series separately
+		# This handles interleaved releases (e.g., v24.05.07 released after v24.11.01)
+		prev_by_version = {}  # major_version -> last_tag_in_that_version
+
 		if len(tags_sorted_by_date_desc) > 0:
 			logger.debug('Collecting statistics for %d filtered tags' % len(tags_sorted_by_date_desc))
+
 		for tag in reversed(tags_sorted_by_date_desc):
-			# Check if major version changed - if so, reset comparison
 			current_major_version = self.getTagMajorVersion(tag)
-			if current_major_version and current_major_version != prev_major_version:
-				# Major version changed, reset prev to start new series
-				prev = None
-				prev_major_version = current_major_version
+
+			# Get the previous tag from the same major version series
+			prev = prev_by_version.get(current_major_version) if current_major_version else None
+
+			if current_major_version and current_major_version not in prev_by_version:
 				logger.debug('Starting new version series: %s' % current_major_version)
 
 			cmd = 'git shortlog -s "%s"' % tag
@@ -719,9 +723,13 @@ class GitDataCollector(DataCollector):
 			output = getpipeoutput([cmd], quiet=True)
 			if len(output) == 0:
 				continue
-			prev = tag
+
+			# Update the previous tag for this major version
+			if current_major_version:
+				prev_by_version[current_major_version] = tag
+
 			for line in output.split('\n'):
-				parts = re.split('\s+', line, 2)
+				parts = re.split(r'\s+', line, 2)
 				commits = int(parts[1])
 				author = parts[2]
 				self.tags[tag]['commits'] += commits
