@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 
 try:
 	from tqdm import tqdm as tqdm_real
@@ -537,17 +539,33 @@ class GitDataCollector(DataCollector):
 			# timezone
 			self.commits_by_timezone[timezone] = self.commits_by_timezone.get(timezone, 0) + 1
 
-		# TODO Optimize this, it's the worst bottleneck
+		# Parallel file counting (optimized from previous bottleneck)
 		# outputs "<stamp> <files>" for each revision
 		self.files_by_stamp = {} # stamp -> files
 		cmd = 'git rev-list --pretty=format:"%%at %%T" %s %s' % (git_filter, git_branch)
 		revlines = getpipeoutput([cmd, 'grep -v ^commit']).strip().split('\n')
 		lines = []
 		logger.info('Counting files in %d revisions...' % len(revlines))
-		for revline in tqdm(revlines, desc='Counting files', unit='revisions', disable=logger.level > logging.INFO):
+
+		# Helper function for parallel execution
+		def count_files_for_rev(revline):
 			time, rev = revline.split(' ')
 			linecount = self.getFilesInCommit(rev)
-			lines.append('%d %d' % (int(time), linecount))
+			return '%d %d' % (int(time), linecount)
+
+		# Use parallel processing with progress bar
+		with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+			futures = {executor.submit(count_files_for_rev, revline): revline for revline in revlines}
+			pbar = tqdm(total=len(futures), desc='Counting files', unit='revisions', disable=logger.level > logging.INFO)
+
+			for future in as_completed(futures):
+				try:
+					result = future.result()
+					lines.append(result)
+				except Exception as e:
+					logger.warning('Failed to count files for revision: %s' % str(e))
+				pbar.update(1)
+			pbar.close()
 
 		self.total_commits = len(lines)
 		for line in lines:
@@ -560,13 +578,15 @@ class GitDataCollector(DataCollector):
 			except ValueError:
 				logger.warning('Failed to parse line "%s"' % line)
 
-		# extensions
+		# extensions - parallel analysis
 		self.extensions = {} # extension -> files, lines
 		lines = getpipeoutput(['git ls-tree -r -z %s' % git_branch]).split('\000')
 		file_lines = [l for l in lines if l]
 		self.total_files = len(file_lines)
 		logger.info('Analyzing %d files...' % self.total_files)
-		for line in tqdm(file_lines, desc='Analyzing extensions', unit='files', disable=logger.level > logging.INFO):
+
+		# Helper function for parallel extension analysis
+		def analyze_file_extension(line):
 			parts = re.split('\s+', line, 4)
 			sha1 = parts[2]
 			filename = parts[3]
@@ -578,14 +598,30 @@ class GitDataCollector(DataCollector):
 			if len(ext) > conf['max_ext_length']:
 				ext = ''
 
-			if ext not in self.extensions:
-				self.extensions[ext] = {'files': 0, 'lines': 0}
-
-			self.extensions[ext]['files'] += 1
 			try:
-				self.extensions[ext]['lines'] += self.getLinesInBlob(sha1)
+				line_count = self.getLinesInBlob(sha1)
 			except Exception:
 				logger.warning('Could not count lines for file "%s"' % line)
+				line_count = 0
+
+			return (ext, line_count)
+
+		# Use parallel processing with progress bar
+		with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+			futures = {executor.submit(analyze_file_extension, line): line for line in file_lines}
+			pbar = tqdm(total=len(futures), desc='Analyzing extensions', unit='files', disable=logger.level > logging.INFO)
+
+			for future in as_completed(futures):
+				try:
+					ext, line_count = future.result()
+					if ext not in self.extensions:
+						self.extensions[ext] = {'files': 0, 'lines': 0}
+					self.extensions[ext]['files'] += 1
+					self.extensions[ext]['lines'] += line_count
+				except Exception as e:
+					logger.warning('Failed to analyze file: %s' % str(e))
+				pbar.update(1)
+			pbar.close()
 
 		# line statistics
 		# outputs:
@@ -1672,10 +1708,25 @@ plot 'lines_of_code.dat' using 1:2 w lines
 		files = glob.glob(path + '/*.plot')
 		logger.info('Rendering %d graphs...' % len(files))
 
-		for f in tqdm(files, desc='Rendering graphs', unit='graphs', disable=logger.level > logging.INFO):
-			out = getpipeoutput([gnuplot_cmd + ' "%s"' % f])
-			if len(out) > 0:
-				logger.info(out)
+		# Helper function for parallel graph rendering
+		def render_graph(plot_file):
+			out = getpipeoutput([gnuplot_cmd + ' "%s"' % plot_file])
+			return (plot_file, out)
+
+		# Use parallel processing with progress bar
+		with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+			futures = {executor.submit(render_graph, f): f for f in files}
+			pbar = tqdm(total=len(futures), desc='Rendering graphs', unit='graphs', disable=logger.level > logging.INFO)
+
+			for future in as_completed(futures):
+				try:
+					plot_file, out = future.result()
+					if len(out) > 0:
+						logger.info(out)
+				except Exception as e:
+					logger.warning('Failed to render graph: %s' % str(e))
+				pbar.update(1)
+			pbar.close()
 
 	def printHeader(self, f, title = ''):
 		f.write(
