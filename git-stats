@@ -709,6 +709,8 @@ class GitDataCollector(DataCollector):
 		if len(tags_sorted_by_date_desc) > 0:
 			logger.debug('Collecting statistics for %d filtered tags' % len(tags_sorted_by_date_desc))
 
+		# Phase 1: Build tag comparison map (sequential - maintains correctness)
+		tag_comparisons = {}  # tag -> prev_tag
 		for tag in reversed(tags_sorted_by_date_desc):
 			current_major_version = self.getTagMajorVersion(tag)
 			is_first_release = self.isFirstReleaseInSeries(tag)
@@ -728,12 +730,7 @@ class GitDataCollector(DataCollector):
 			if current_major_version and current_major_version not in prev_by_version:
 				logger.debug('Starting new version series: %s' % current_major_version)
 
-			cmd = 'git shortlog -s "%s"' % tag
-			if prev != None:
-				cmd += ' "^%s"' % prev
-			output = getpipeoutput([cmd], quiet=True)
-			if len(output) == 0:
-				continue
+			tag_comparisons[tag] = prev
 
 			# Update tracking variables
 			if current_major_version:
@@ -741,12 +738,53 @@ class GitDataCollector(DataCollector):
 			if is_first_release:
 				prev_first_release = tag
 
-			for line in output.split('\n'):
-				parts = re.split(r'\s+', line, 2)
-				commits = int(parts[1])
-				author = parts[2]
-				self.tags[tag]['commits'] += commits
-				self.tags[tag]['authors'][author] = commits
+		# Phase 2: Execute git shortlog commands in parallel
+		def process_tag_stats(tag, prev_tag):
+			"""Worker function to get commit stats for a single tag"""
+			cmd = 'git shortlog -s "%s"' % tag
+			if prev_tag:
+				cmd += ' "^%s"' % prev_tag
+			try:
+				output = getpipeoutput([cmd], quiet=True)
+				if len(output) == 0:
+					return (tag, {})
+
+				# Parse output
+				authors = {}
+				for line in output.split('\n'):
+					parts = re.split(r'\s+', line, 2)
+					if len(parts) >= 3:
+						commits = int(parts[1])
+						author = parts[2]
+						authors[author] = commits
+				return (tag, authors)
+			except Exception as e:
+				logger.warning('Error processing tag %s: %s' % (tag, str(e)))
+				return (tag, {})
+
+		# Process tags in parallel
+		if len(tag_comparisons) > 0:
+			logger.info('Processing %d tags in parallel...' % len(tag_comparisons))
+			max_workers = min(len(tag_comparisons), os.cpu_count() or 4, 8)  # Cap at 8 to avoid overload
+
+			with ThreadPoolExecutor(max_workers=max_workers) as executor:
+				futures = {
+					executor.submit(process_tag_stats, tag, prev): tag
+					for tag, prev in tag_comparisons.items()
+				}
+
+				# Collect results with progress bar
+				for future in tqdm(as_completed(futures), total=len(futures),
+				                  desc='Processing tags', unit='tags', disable=logger.level > logging.INFO):
+					tag = futures[future]
+					try:
+						result_tag, authors = future.result()
+						# Store results
+						for author, commits in authors.items():
+							self.tags[result_tag]['commits'] += commits
+							self.tags[result_tag]['authors'][author] = commits
+					except Exception as e:
+						logger.error('Failed to process tag %s: %s' % (tag, str(e)))
 
 		# Collect revision statistics
 		# Outputs "<hash> <stamp> <date> <time> <timezone> <author> '<' <mail> '>'"
