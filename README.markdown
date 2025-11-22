@@ -18,12 +18,12 @@ http://gitstats.sourceforge.net/examples/gitstats/
 
 ## Requirements
 
-- Python (>= 2.4.4) (python3 is not supported)
+- Python 3 (>= 3.6 recommended)
 - Git (>= 1.5.2.4)
 - Gnuplot (>= 4.0.0)
 - a git repository (bare clone will work as well)
 
-The above versions are not absolute requirements; older versions may work also.
+The above versions are not absolute requirements; older or newer versions may work also.
 
 ## Install
 

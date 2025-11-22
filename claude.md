@@ -31,7 +31,7 @@ GitStats analyzes git repositories and produces visual statistics including:
 - `doc/`: Documentation directory
 
 ### Technology Stack
-- **Language**: Python 2.x (>= 2.4.4)
+- **Language**: Python 3 (>= 3.6 recommended)
 - **VCS**: Git (>= 1.5.2.4)
 - **Graphing**: Gnuplot (>= 4.0.0)
 - **Output**: HTML/CSS/JavaScript
@@ -68,15 +68,16 @@ The `conf` dictionary contains customizable settings:
 - Different terminal output behavior based on platform
 
 ### Code Conventions
-- Python 2.x syntax (print statements, not functions)
+- Python 3 syntax (print functions, unicode strings by default)
 - Global variables for execution time tracking
 - Heavy use of subprocess for git command execution
 - Cache files use pickle with zlib compression
+- Bytes/string handling with UTF-8 encoding for subprocess output
 
 ## Important Notes
 
 ### Limitations
-- **Python 3 NOT supported** - code uses Python 2 syntax
+- Requires Python 3 (Python 2 no longer supported)
 - Requires git repository (bare clones work)
 - Memory-intensive for large repositories
 - Assumes local file structure (CSS/JS files in same directory)
@@ -94,12 +95,14 @@ The `conf` dictionary contains customizable settings:
 ## Development Guidelines
 
 When modifying this codebase:
-1. Maintain Python 2.x compatibility
+1. Maintain Python 3 compatibility (3.6+)
 2. Test with various repository sizes
 3. Ensure cache invalidation works correctly
 4. Validate HTML output in multiple browsers
 5. Test graph generation with different gnuplot versions
 6. Be mindful of memory usage on large repos
+7. Handle subprocess output as bytes and decode properly
+8. Use context managers (with statements) for file operations
 
 ## File Structure
 ```
