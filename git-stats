@@ -4,6 +4,7 @@
 import argparse
 import datetime
 import glob
+import hashlib
 import logging
 import os
 import pickle
@@ -2430,7 +2431,20 @@ class GitStats:
 				logger.info('Collecting data from repository %d/%d: %s' % (idx, len(gitpaths), gitpath))
 				os.chdir(gitpath)
 				repo_data = GitDataCollector()
+
+				# Load cache for this specific repository
+				# Use a cache file based on the repository path to keep caches separate
+				repo_hash = hashlib.md5(os.path.abspath(gitpath).encode()).hexdigest()[:8]
+				repo_cachefile = os.path.join(outputpath, 'gitstats.cache.%s' % repo_hash)
+				flush_cache = getattr(self.args, 'flush', False)
+				repo_data.loadCache(repo_cachefile, flush=flush_cache)
+
+				# Collect data
 				repo_data.collect(gitpath, args=self.args)
+
+				# Save cache for this repository
+				repo_data.saveCache(repo_cachefile)
+
 				all_data.append((gitpath, repo_data))
 				os.chdir(rundir)
 
