@@ -1415,7 +1415,8 @@ class HTMLReportCreator(ReportCreator):
 		f.write('<dt>Generated</dt><dd>%s (in %d seconds)</dd>' % (datetime.datetime.now().strftime(format), time.time() - data.getStampCreated()))
 		f.write('<dt>Generator</dt><dd><a href="http://gitstats.sourceforge.net/">GitStats</a> (version %s)</dd>' % getversion())
 		f.write('<dt>Report Period</dt><dd>%s to %s</dd>' % (data.getFirstCommitDate().strftime(format), data.getLastCommitDate().strftime(format)))
-		f.write('<dt>Age</dt><dd>%d days, %d active days (%3.2f%%)</dd>' % (data.getCommitDeltaDays(), len(data.getActiveDays()), (100.0 * len(data.getActiveDays()) / data.getCommitDeltaDays())))
+		active_days_pct = (100.0 * len(data.getActiveDays()) / data.getCommitDeltaDays()) if data.getCommitDeltaDays() > 0 else 0
+		f.write('<dt>Age</dt><dd>%d days, %d active days (%3.2f%%)</dd>' % (data.getCommitDeltaDays(), len(data.getActiveDays()), active_days_pct))
 		f.write('<dt>Total Files</dt><dd>%s</dd>' % data.getTotalFiles())
 		f.write('<dt>Total Lines of Code</dt><dd>%s (%d added, %d removed)</dd>' % (data.getTotalLOC(), data.total_lines_added, data.total_lines_removed))
 		total_commits = data.getTotalCommits()
@@ -1484,7 +1485,7 @@ class HTMLReportCreator(ReportCreator):
 		fp = open(path + '/hour_of_day.dat', 'w')
 		for i in range(0, 24):
 			if i in hour_of_day:
-				r = 127 + int((float(hour_of_day[i]) / data.activity_by_hour_of_day_busiest) * 128)
+				r = 127 + int((float(hour_of_day[i]) / data.activity_by_hour_of_day_busiest) * 128) if data.activity_by_hour_of_day_busiest > 0 else 127
 				f.write('<td style="background-color: rgb(%d, 0, 0)">%d</td>' % (r, hour_of_day[i]))
 				fp.write('%d %d\n' % (i, hour_of_day[i]))
 			else:
@@ -1495,7 +1496,7 @@ class HTMLReportCreator(ReportCreator):
 		totalcommits = data.getTotalCommits()
 		for i in range(0, 24):
 			if i in hour_of_day:
-				r = 127 + int((float(hour_of_day[i]) / data.activity_by_hour_of_day_busiest) * 128)
+				r = 127 + int((float(hour_of_day[i]) / data.activity_by_hour_of_day_busiest) * 128) if data.activity_by_hour_of_day_busiest > 0 else 127
 				pct = (100.0 * hour_of_day[i]) / totalcommits if totalcommits > 0 else 0
 				f.write('<td style="background-color: rgb(%d, 0, 0)">%.2f</td>' % (r, pct))
 			else:
@@ -1576,7 +1577,7 @@ class HTMLReportCreator(ReportCreator):
 					commits = 0
 				if commits != 0:
 					f.write('<td')
-					r = 127 + int((float(commits) / data.activity_by_hour_of_week_busiest) * 128)
+					r = 127 + int((float(commits) / data.activity_by_hour_of_week_busiest) * 128) if data.activity_by_hour_of_week_busiest > 0 else 127
 					f.write(' style="background-color: rgb(%d, 0, 0)"' % r)
 					f.write('>%d</td>' % commits)
 				else:
@@ -1663,7 +1664,7 @@ class HTMLReportCreator(ReportCreator):
 		max_commits_on_tz = max(list(data.commits_by_timezone.values()))
 		for i in sorted(list(data.commits_by_timezone.keys()), key = lambda n : int(n)):
 			commits = data.commits_by_timezone[i]
-			r = 127 + int((float(commits) / max_commits_on_tz) * 128)
+			r = 127 + int((float(commits) / max_commits_on_tz) * 128) if max_commits_on_tz > 0 else 127
 			f.write('<tr><th>%s</th><td style="background-color: rgb(%d, 0, 0)">%d</td></tr>' % (i, r, commits))
 		f.write('</tr></table>')
 
@@ -1751,7 +1752,9 @@ class HTMLReportCreator(ReportCreator):
 			authors.reverse()
 			commits = data.author_of_month[yymm][authors[0]]
 			next = ', '.join(authors[1:5])
-			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td></tr>' % (yymm, authors[0], commits, (100.0 * commits) / data.commits_by_month[yymm], data.commits_by_month[yymm], next))
+			month_total = data.commits_by_month[yymm]
+			pct = (100.0 * commits) / month_total if month_total > 0 else 0
+			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td></tr>' % (yymm, authors[0], commits, pct, month_total, next))
 
 		f.write('</table>')
 
@@ -1763,7 +1766,9 @@ class HTMLReportCreator(ReportCreator):
 			authors.reverse()
 			commits = data.author_of_year[yy][authors[0]]
 			next = ', '.join(authors[1:5])
-			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td></tr>' % (yy, authors[0], commits, (100.0 * commits) / data.commits_by_year[yy], data.commits_by_year[yy], next))
+			year_total = data.commits_by_year[yy]
+			pct = (100.0 * commits) / year_total if year_total > 0 else 0
+			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td></tr>' % (yy, authors[0], commits, pct, year_total, next))
 		f.write('</table>')
 
 		# Author Collaboration Analysis
@@ -1878,7 +1883,8 @@ class HTMLReportCreator(ReportCreator):
 		f.write('<dl>\n')
 		f.write('<dt>Total files</dt><dd>%d</dd>' % data.getTotalFiles())
 		f.write('<dt>Total lines</dt><dd>%d</dd>' % data.getTotalLOC())
-		f.write('<dt>Average file size</dt><dd>%.2f bytes</dd>' % ((100.0 * data.getTotalLOC()) / data.getTotalFiles()))
+		avg_size = ((100.0 * data.getTotalLOC()) / data.getTotalFiles()) if data.getTotalFiles() > 0 else 0
+		f.write('<dt>Average file size</dt><dd>%.2f bytes</dd>' % avg_size)
 		f.write('</dl>\n')
 
 		# Files :: File count by date
@@ -1908,7 +1914,10 @@ class HTMLReportCreator(ReportCreator):
 		for ext in sorted(list(data.extensions.keys())):
 			files = data.extensions[ext]['files']
 			lines = data.extensions[ext]['lines']
-			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td><td>%d (%.2f%%)</td><td>%d</td></tr>' % (ext, files, (100.0 * files) / data.getTotalFiles(), lines, (100.0 * lines) / data.getTotalLOC(), lines // files))
+			files_pct = (100.0 * files) / data.getTotalFiles() if data.getTotalFiles() > 0 else 0
+			lines_pct = (100.0 * lines) / data.getTotalLOC() if data.getTotalLOC() > 0 else 0
+			lines_per_file = lines // files if files > 0 else 0
+			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td><td>%d (%.2f%%)</td><td>%d</td></tr>' % (ext, files, files_pct, lines, lines_pct, lines_per_file))
 		f.write('</table>')
 
 		# File Volatility Analysis
@@ -2722,7 +2731,8 @@ class GitStats:
 
 		time_end = time.time()
 		exectime_internal = time_end - time_start
-		logger.info('Execution time %.5f secs, %.5f secs (%.2f %%) in external commands)' % (exectime_internal, exectime_external, (100.0 * exectime_external) / exectime_internal))
+		ext_pct = (100.0 * exectime_external) / exectime_internal if exectime_internal > 0 else 0
+	logger.info('Execution time %.5f secs, %.5f secs (%.2f %%) in external commands)' % (exectime_internal, exectime_external, ext_pct))
 
 
 def parse_arguments():
